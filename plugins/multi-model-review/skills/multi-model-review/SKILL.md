@@ -14,9 +14,11 @@ Helper: `review.mjs`, in the same folder as this file. Run it as `node --no-depr
 ## 1. Pin down what is reviewed
 Take it from the conversation when it is clear: the draft you just wrote, the current branch, a PR the user named.
 Ask only if it is genuinely unclear (in step 3's first question).
-- **Code:** save the diff into the exchange folder (`git diff <base>...HEAD > <X>/diff.patch`, or `gh pr diff <n>`),
-  so reviewers never need a shell. List the files that matter; reviewers may read them. Priorities: correctness,
-  then security, then configuration, then consistency, then style.
+- **Code:** get the diff (`git diff <base>...<head>`, or `gh pr diff <n>`), save a copy to `<X>/diff.patch`, and
+  **paste it into the brief itself** in a ```diff block (up to about 1,500 lines; for larger changes, review in parts).
+  Some reviewers cannot read files on every machine (Codex's sandbox can block it on Windows), so everything a
+  reviewer needs must be in the brief: the diff, plus a few lines of context on the files it touches that are not in
+  the diff. Priorities: correctness, then security, then configuration, then consistency, then style.
 - **Draft:** copy the material being answered and the current draft into the brief, word for word.
 
 ## 2. See what the user can use
@@ -45,7 +47,7 @@ Exchange folder `<X>` = `~/.claude/review-exchange/<yyyymmdd>-<short-topic>/`. O
                  "VERDICT: AGREE" or "VERDICT: REVISE" (plus "## Required changes" for code,
                  "## Proposed draft" for a draft)
 ## What the user asked for
-## The material  the diff file path and files to read, or the original text word for word
+## The material  the diff pasted in full, with short context on files it touches; or the original text word for word
 ## Current draft (drafts only)
 ## Evidence      numbered, each with file:line; facts checked live are marked
                  "LIVE: checked by Claude on <date> with <command>; take as given unless the code contradicts it"
