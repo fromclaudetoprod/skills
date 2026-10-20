@@ -5,6 +5,10 @@
       { "model": "gpt-6.1-sol", "why": "OpenAI's flagship coding model; a strong first read from outside the Claude family" },
       { "model": "gpt-5.6-terra", "why": "thorough, claim-by-claim checker at lower cost" }
     ],
+    "gemini": [
+      { "model": "gemini-4-argon", "why": "Google's flagship through your own Gemini API key; an independent outside read" },
+      { "model": "gemini-3.1-pro", "why": "Google's previous Pro model, if Argon isn't enabled for your key" }
+    ],
     "cursor": [
       { "model": "grok-4.7-high", "why": "xAI's family through your Cursor plan; an independent outside read" },
       { "model": "gemini-4-argon-high", "why": "Google's family through Cursor; strong on reasoning about code" },

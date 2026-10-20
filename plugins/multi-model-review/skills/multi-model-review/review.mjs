@@ -26,7 +26,7 @@ import { fileURLToPath } from "node:url";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ACCESS_FILE = process.env.MMR_ACCESS_FILE || path.join(os.homedir(), ".claude", "multi-model-review", "access.json");
 const MODELS_FILE = path.join(HERE, "models.json");
-const TOOLS = ["codex", "claude", "cursor", "copilot"];
+const TOOLS = ["codex", "claude", "cursor", "gemini", "copilot"];
 // The command each tool answers to. Cursor's CLI installs as "cursor-agent" (also "agent"); a fresh install may not
 // be on PATH until a new terminal, so fall back to its default Windows install folder.
 function binOf(tool) {
@@ -112,7 +112,7 @@ function detect() {
 // One entry per model, on the best tool that has it: your own Codex or Claude subscription before Copilot.
 function options() {
   const { tools } = detect();
-  const preference = { codex: 0, claude: 1, cursor: 2, copilot: 3 };
+  const preference = { codex: 0, claude: 1, gemini: 2, cursor: 3, copilot: 4 };
   const best = new Map();
   for (const [tool, t] of Object.entries(tools)) {
     if (!t.installed || t.capped) continue;
@@ -174,6 +174,11 @@ function run() {
       "--allowedTools", "Read", "Grep", "Glob",
       "--disallowedTools", "Edit", "Write", "NotebookEdit", "Bash", "PowerShell", "WebFetch", "WebSearch"],
       { input: ask, cwd: workdir, timeout: 900_000 });
+  } else if (tool === "gemini") {
+    // Gemini CLI: plan mode is its read-only mode; --skip-trust lets it run headless. Signing in with a personal
+    // Google account no longer works for scripted use, so it needs GEMINI_API_KEY (environment or ~/.gemini/.env).
+    r = runTool("gemini", ["-p", quote(ask), "-m", model, "--approval-mode", "plan", "--skip-trust", "-o", "text",
+      "--include-directories", quote(path.dirname(brief))], { cwd: workdir, timeout: 900_000 });
   } else if (tool === "cursor") {
     // Cursor's print mode can write and run commands by default. Ask mode is its read-only mode, the sandbox stays
     // on, and --force is never passed, so nothing is auto-approved.
