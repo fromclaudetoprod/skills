@@ -31,7 +31,7 @@ It only offers tools you have installed and, over time, only models your account
 
 ## Install
 ```
-/plugin marketplace add toddpick/fromclaudetoprod-skills
+/plugin marketplace add fromclaudetoprod/skills
 /plugin install multi-model-review@from-claude-to-prod
 ```
 Or copy `skills/multi-model-review` into `~/.claude/skills/`.
@@ -39,7 +39,7 @@ Or copy `skills/multi-model-review` into `~/.claude/skills/`.
 If your Claude app says `/plugin` isn't available, run the same two steps in a terminal, then start a new chat
 (or run `/reload-plugins`):
 ```
-claude plugin marketplace add toddpick/fromclaudetoprod-skills
+claude plugin marketplace add fromclaudetoprod/skills
 claude plugin install multi-model-review@from-claude-to-prod
 ```
 

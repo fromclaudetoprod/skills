@@ -6,12 +6,12 @@ install only what you want. Independent project; not affiliated with or endorsed
 ## Install
 In Claude Code, add the catalog once:
 ```
-/plugin marketplace add toddpick/fromclaudetoprod-skills
+/plugin marketplace add fromclaudetoprod/skills
 ```
 If your Claude app says `/plugin` isn't available, run the same two steps in a terminal, then start a new chat
 (or run `/reload-plugins`):
 ```
-claude plugin marketplace add toddpick/fromclaudetoprod-skills
+claude plugin marketplace add fromclaudetoprod/skills
 claude plugin install multi-model-review@from-claude-to-prod
 ```
 
