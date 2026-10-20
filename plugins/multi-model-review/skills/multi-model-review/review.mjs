@@ -200,7 +200,9 @@ function run() {
   if (tool !== "codex" && r.out) fs.writeFileSync(out, r.out);
   fs.writeFileSync(out.replace(/\.md$/i, "") + ".log", `exit ${r.code}\n--- stderr ---\n${r.err}\n`);
   if (status) record(tool, model, status, note);
-  if (status === "capped") record(tool, "__tool", "capped", note);
+  // A cap that says to switch models (Cursor's per-model usage limits) blocks only this model; any other cap
+  // (for example a Codex account spend cap) blocks the whole tool until it is cleared.
+  if (status === "capped" && !/(different|another|other) model/i.test(r.err)) record(tool, "__tool", "capped", note);
 
   const treeChanged = repo ? runTool("git", ["-C", quote(repo), "status", "--porcelain"]).out !== treeBefore : false;
   const reply = fs.existsSync(out) ? fs.readFileSync(out, "utf8") : "";
