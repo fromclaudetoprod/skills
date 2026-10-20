@@ -11,6 +11,8 @@ Everything runs on your machine, read-only. No cloud agents.
 - **Claude Code** and **Node.js 18+**.
 - **At least one reviewer tool**, signed in:
   - OpenAI Codex CLI (`codex`)
+  - **Cursor CLI** (`cursor-agent`; install from cursor.com/cli, then `cursor-agent login`). One Cursor plan reaches
+    GPT, Grok, Gemini, Kimi, GLM and Claude models, so it is the easiest way to get reviewers from several companies.
   - GitHub Copilot CLI (`npm install -g @github/copilot`, run `copilot` once to sign in)
   - Claude Code's own CLI (`claude`), which you already have
 
@@ -38,7 +40,11 @@ claude-opus-5-5."*
 ## Good to know
 - **Read-only:** reviewers get no shell and no write access; Claude puts the diff in the brief. If the repository
   changes during a round, the run stops.
+- **Cursor is NOT read-only by default.** Its non-interactive mode can write files and run commands. The plugin runs
+  it in **ask mode** (read-only), never with `--force`, and with its sandbox on macOS/Linux (the sandbox does not exist
+  on Windows, where ask mode, Cursor's command allowlist and the working-tree check are the guard).
 - **Your data:** each brief goes to that model's company. Claude keeps secrets, keys and customer data out of it.
 - **Cost:** Codex and Claude bill to your own subscriptions. Each Copilot CLI call carries a large built-in system
   prompt, so even short rounds use Copilot credits.
-- **Tested:** with the Claude CLI and Codex CLI on Windows. Copilot CLI support follows its documented flags.
+- **Tested:** Claude CLI and Cursor CLI rounds on Windows (2026-10-19). Codex and Copilot CLI support follow their
+  documented flags.

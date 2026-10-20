@@ -1,6 +1,6 @@
 ---
 name: multi-model-review
-description: Use when the user asks for a "multi-model review", "review this with other models", "get a second opinion from GPT / Grok / another model", "run the review rounds", or wants code (a diff, branch, PR or file) or a draft (email, plan, post) reviewed by several AI models in turn. Finds which local reviewer tools (OpenAI Codex CLI, GitHub Copilot CLI, Claude CLI) and models the user can use, asks how many rounds and which model per round, runs each round read-only with Claude verifying and revising in between, and reports one result.
+description: Use when the user asks for a "multi-model review", "review this with other models", "get a second opinion from GPT / Grok / another model", "run the review rounds", or wants code (a diff, branch, PR or file) or a draft (email, plan, post) reviewed by several AI models in turn. Finds which local reviewer tools (OpenAI Codex CLI, Cursor CLI, GitHub Copilot CLI, Claude CLI) and models the user can use, asks how many rounds and which model per round, runs each round read-only with Claude verifying and revising in between, and reports one result.
 ---
 
 # Multi-model review
@@ -58,7 +58,7 @@ and never a secret, key, token or customer data.
 
 ## 5. Run each round
 ```
-node --no-deprecation "<this folder>/review.mjs" run --tool <codex|claude|copilot> --model <id> \
+node --no-deprecation "<this folder>/review.mjs" run --tool <codex|cursor|claude|copilot> --model <id> \
   --brief "<X>/round-N-brief.md" --out "<X>/round-N-reply.md" [--repo "<repository root>"]
 ```
 Run it in the background with a 15-minute timeout and wait for it; do not poll. It prints JSON with `status`,
@@ -72,7 +72,8 @@ Run it in the background with a 15-minute timeout and wait for it; do not poll. 
 | 5 | the repository changed during the round | stop, show `git status`, report; do not continue |
 | 2 | anything else | retry once, then stop and report |
 
-Read-only by flags: Codex `-s read-only`; Claude only Read, Grep and Glob; Copilot with write, shell and web denied.
+Read-only by flags: Codex `-s read-only`; Cursor `--mode ask`, never `--force` (sandbox on macOS/Linux); Claude only
+Read, Grep and Glob; Copilot with write, shell and web denied.
 Never use a cloud coding agent for a round.
 
 ## 6. Between rounds

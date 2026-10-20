@@ -26,7 +26,14 @@ import { fileURLToPath } from "node:url";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ACCESS_FILE = process.env.MMR_ACCESS_FILE || path.join(os.homedir(), ".claude", "multi-model-review", "access.json");
 const MODELS_FILE = path.join(HERE, "models.json");
-const TOOLS = ["codex", "claude", "copilot"];
+const TOOLS = ["codex", "claude", "cursor", "copilot"];
+// The command each tool answers to. Cursor's CLI installs as "cursor-agent" (also "agent"); a fresh install may not
+// be on PATH until a new terminal, so fall back to its default Windows install folder.
+function binOf(tool) {
+  if (tool !== "cursor") return tool;
+  const local = process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, "cursor-agent", "cursor-agent.cmd");
+  return runTool("cursor-agent", ["--version"]).code === 0 ? "cursor-agent" : (local && fs.existsSync(local) && !UNSAFE_PATH.test(local) ? quote(local) : "cursor-agent");
+}
 const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:\/-]{0,79}$/;
 // Characters cmd.exe treats specially. Paths containing them are refused rather than escaped.
 const UNSAFE_PATH = /["%^&|<>!`\r\n]/;
@@ -50,7 +57,7 @@ function runTool(cmd, args, { input, cwd, timeout = 60_000 } = {}) {
 }
 
 function versionOf(tool) {
-  const r = runTool(tool, ["--version"]);
+  const r = runTool(binOf(tool), ["--version"]);
   return r.code === 0 ? (r.out || r.err).trim().split(/\r?\n/)[0] : null;
 }
 
@@ -61,7 +68,16 @@ function familyOf(id) {
   if (m.startsWith("grok")) return "xAI";
   if (m.startsWith("gemini")) return "Google";
   if (m.startsWith("kimi")) return "Moonshot";
+  if (m.startsWith("glm")) return "Zhipu";
+  if (/^(cursor-grok)/.test(m)) return "xAI";
+  if (m.startsWith("composer")) return "Cursor";
   return "Other";
+}
+
+function cursorCatalog() {
+  const r = runTool(binOf("cursor"), ["models"]);
+  if (r.code !== 0) return new Set();
+  return new Set([...r.out.matchAll(/^([a-z0-9][\w.\-]*) - /gim)].map((m) => m[1]));
 }
 
 function detect() {
@@ -74,7 +90,9 @@ function detect() {
     if (!version) { tools[tool] = { installed: false }; continue; }
     const suggested = models.suggested?.[tool] ?? [];
     const known = Object.keys(access[tool] ?? {}).filter((k) => !k.startsWith("__"));
-    const ids = [...new Set([...suggested.map((s) => s.model), ...known])];
+    // Cursor can list exactly what this account may use ("id - Name" per line); trust that over guesses.
+    const catalog = tool === "cursor" ? cursorCatalog() : null;
+    const ids = [...new Set([...suggested.map((s) => s.model), ...known])].filter((id) => !catalog || catalog.has(id));
     tools[tool] = {
       installed: true, version,
       capped: access[tool]?.__tool?.status === "capped",
@@ -94,7 +112,7 @@ function detect() {
 // One entry per model, on the best tool that has it: your own Codex or Claude subscription before Copilot.
 function options() {
   const { tools } = detect();
-  const preference = { codex: 0, claude: 1, copilot: 2 };
+  const preference = { codex: 0, claude: 1, cursor: 2, copilot: 3 };
   const best = new Map();
   for (const [tool, t] of Object.entries(tools)) {
     if (!t.installed || t.capped) continue;
@@ -156,6 +174,15 @@ function run() {
       "--allowedTools", "Read", "Grep", "Glob",
       "--disallowedTools", "Edit", "Write", "NotebookEdit", "Bash", "PowerShell", "WebFetch", "WebSearch"],
       { input: ask, cwd: workdir, timeout: 900_000 });
+  } else if (tool === "cursor") {
+    // Cursor's print mode can write and run commands by default. Ask mode is its read-only mode, the sandbox stays
+    // on, and --force is never passed, so nothing is auto-approved.
+    // Cursor's sandbox exists only on macOS and Linux; on Windows, ask mode + no --force + Cursor's own command
+    // allowlist + our working-tree check are the guard.
+    const sandbox = process.platform === "win32" ? [] : ["--sandbox", "enabled"];
+    r = runTool(binOf("cursor"), ["-p", "--mode", "ask", ...sandbox, "--trust", "--output-format", "text",
+      "--model", model, "--workspace", quote(workdir), "--add-dir", quote(path.dirname(brief)), quote(ask)],
+      { cwd: workdir, timeout: 900_000 });
   } else {
     r = runTool("copilot", ["-p", quote(ask), "--model", model, "--add-dir", quote(path.dirname(brief)),
       "--deny-tool", "write", "--deny-tool", "shell", "--deny-tool", "url", "--no-color", "-s"],
@@ -165,7 +192,8 @@ function run() {
   let status = "available", exitCode = 0, note;
   if (r.code !== 0 || r.spawnError) {
     const errText = `${r.err}\n${r.spawnError?.message ?? ""}`;
-    if (/not available|model\b.*\bnot (found|supported|enabled)|unknown model|invalid model/i.test(errText)) { status = "unavailable"; exitCode = 3; }
+    // Only messages about the MODEL count as "unavailable"; a sandbox or network error is not about the model.
+    if (/\bmodel\b[^\n]{0,80}\b(not (available|found|supported|enabled)|unavailable|does not exist)|unknown model|invalid model|not available (on|for) your (plan|account)/i.test(errText)) { status = "unavailable"; exitCode = 3; }
     else if (/spend cap|usage limit|quota|rate.?limit|credits? (exhausted|exceeded)/i.test(errText)) { status = "capped"; exitCode = 4; note = errText.match(/.*(cap|limit|quota|credit).*/i)?.[0]?.trim(); }
     else { status = null; exitCode = 2; }
   }

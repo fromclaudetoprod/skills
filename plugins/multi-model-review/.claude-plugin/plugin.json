@@ -1,9 +1,9 @@
 {
   "name": "multi-model-review",
   "version": "1.0.0",
-  "description": "Review code or a draft in several rounds, each by a different AI model (OpenAI Codex, GitHub Copilot CLI or Claude CLI), run locally and read-only, with Claude checking every claim and revising between rounds.",
+  "description": "Review code or a draft in several rounds, each by a different AI model (OpenAI Codex, Cursor CLI, GitHub Copilot CLI or Claude CLI), run locally and read-only, with Claude checking every claim and revising between rounds.",
   "author": { "name": "From Claude to Prod", "url": "https://www.fromclaudetoprod.dev" },
   "homepage": "https://www.fromclaudetoprod.dev",
   "license": "MIT",
-  "keywords": ["code-review", "review", "multi-model", "codex", "copilot", "claude-code"]
+  "keywords": ["code-review", "review", "multi-model", "codex", "copilot", "cursor", "claude-code"]
 }

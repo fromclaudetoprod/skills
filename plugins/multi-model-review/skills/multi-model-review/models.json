@@ -5,6 +5,14 @@
       { "model": "gpt-6.1-sol", "why": "OpenAI's flagship coding model; a strong first read from outside the Claude family" },
       { "model": "gpt-5.6-terra", "why": "thorough, claim-by-claim checker at lower cost" }
     ],
+    "cursor": [
+      { "model": "grok-4.7-high", "why": "xAI's family through your Cursor plan; an independent outside read" },
+      { "model": "gemini-4-argon-high", "why": "Google's family through Cursor; strong on reasoning about code" },
+      { "model": "gpt-5.6-sol-high", "why": "OpenAI's family through Cursor, if you have no Codex subscription" },
+      { "model": "kimi-k3-high", "why": "Moonshot's family through Cursor for a further independent read" },
+      { "model": "glm-5.2-high", "why": "Zhipu's family through Cursor" },
+      { "model": "claude-opus-5-5-high", "why": "Claude through Cursor; same family as the author, so last" }
+    ],
     "copilot": [
       { "model": "grok-4.7", "why": "a different model family (xAI) for an independent read" },
       { "model": "gpt-6.1-sol", "why": "OpenAI flagship, if you have no Codex subscription" },
@@ -17,5 +25,5 @@
       { "model": "claude-sonnet-5-5", "why": "an independent Claude read at lower cost" }
     ]
   },
-  "notForReview": ["mini", "flash", "haiku", "-fast", "lite", "nano"]
+  "notForReview": ["(^|[-.])mini($|[-.])", "flash", "haiku", "-fast$", "(^|[-.])lite($|[-.])", "(^|[-.])nano($|[-.])"]
 }
