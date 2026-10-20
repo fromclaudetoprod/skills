@@ -8,6 +8,13 @@ In Claude Code, add the catalog once:
 ```
 /plugin marketplace add toddpick/fromclaudetoprod-skills
 ```
+If your Claude app says `/plugin` isn't available, run the same two steps in a terminal, then start a new chat
+(or run `/reload-plugins`):
+```
+claude plugin marketplace add toddpick/fromclaudetoprod-skills
+claude plugin install multi-model-review@from-claude-to-prod
+```
+
 Then install what you want:
 
 | Plugin | What it does | Install |

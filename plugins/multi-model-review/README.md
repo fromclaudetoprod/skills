@@ -36,6 +36,14 @@ It only offers tools you have installed and, over time, only models your account
 ```
 Or copy `skills/multi-model-review` into `~/.claude/skills/`.
 
+If your Claude app says `/plugin` isn't available, run the same two steps in a terminal, then start a new chat
+(or run `/reload-plugins`):
+```
+claude plugin marketplace add toddpick/fromclaudetoprod-skills
+claude plugin install multi-model-review@from-claude-to-prod
+```
+
+
 ## Use it
 Say **"Run the multi-model review"**. Claude asks how many rounds (three is the default) and which model for each
 round. Or say it all at once: *"Multi-model review of this branch, three rounds: grok-4.7, then gpt-6.1-sol, then
