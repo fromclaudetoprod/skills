@@ -46,5 +46,5 @@ claude-opus-5-5."*
 - **Your data:** each brief goes to that model's company. Claude keeps secrets, keys and customer data out of it.
 - **Cost:** Codex and Claude bill to your own subscriptions. Each Copilot CLI call carries a large built-in system
   prompt, so even short rounds use Copilot credits.
-- **Tested:** Claude CLI and Cursor CLI rounds on Windows (2026-10-19). Codex and Copilot CLI support follow their
+- **Tested:** Claude CLI, Cursor CLI and Codex CLI rounds on Windows (2026-10-19). Copilot CLI support follows its
   documented flags.
