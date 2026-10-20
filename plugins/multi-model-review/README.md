@@ -65,6 +65,8 @@ claude-opus-5-5."*
 - **Gemini CLI** runs in `--approval-mode plan`, its read-only mode.
 - **Usage limits:** plans cap some models (Cursor's Pro plan caps API models such as Gemini per month). A capped model
   is skipped until you clear it; other models on the same tool keep working.
+- **Token usage:** every round records the tokens it used (input and output for Claude, Cursor and Gemini; a total
+  for Codex), and the final report adds them up, so you see what a review really costs.
 - **Your data:** each brief goes to that model's company. Claude keeps secrets, keys and customer data out of it.
 - **Cost:** Codex and Claude bill to your own subscriptions. Each Copilot CLI call carries a large built-in system
   prompt, so even short rounds use Copilot credits.

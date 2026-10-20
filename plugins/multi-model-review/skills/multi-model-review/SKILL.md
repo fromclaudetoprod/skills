@@ -88,10 +88,11 @@ Never use a cloud coding agent for a round.
 - Run every round the user chose, even after an AGREE; each model is an independent read.
 
 ## 7. Report
-Write `<X>/summary.md`: each round's model, tool and verdict, what changed because of it, and any point still in
-dispute with both sides stated fairly. Then one message to the user:
+Write `<X>/summary.md`: each round's model, tool and verdict, its **tokens in / out** (from the `tokens` field the
+helper prints; Codex reports a total only; Copilot reports none), what changed because of it, and any point still in
+dispute with both sides stated fairly. Add a total-tokens line for the whole review. Then one message to the user:
 - The final draft ready to paste, or the verified code findings, most severe first.
-- One line per round: model, verdict, the one thing it contributed.
+- One line per round: model, verdict, tokens used, the one thing it contributed.
 - Where reviewers disagreed, both sides in a sentence each. The user decides.
 - The exchange folder as one full absolute path.
 

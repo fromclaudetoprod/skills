@@ -152,6 +152,34 @@ function record(tool, model, status, note) {
   writeJson(ACCESS_FILE, access);
 }
 
+/** Reply text and token usage per tool. Token fields are null when a tool does not report them. */
+function parseReply(tool, r) {
+  const none = { input: null, output: null, total: null };
+  if (tool === "codex") {
+    const m = `${r.err}\n${r.out}`.match(/tokens used\s*\n?\s*([\d,]+)/i);
+    return { text: null, tokens: { ...none, total: m ? Number(m[1].replace(/,/g, "")) : null } };
+  }
+  let j;
+  try { j = JSON.parse(r.out.trim().split(/\r?\n/).filter(Boolean).pop() || "{}"); } catch { try { j = JSON.parse(r.out); } catch { return { text: r.out, tokens: none }; } }
+  const sum = (a, b) => (a ?? 0) + (b ?? 0);
+  if (tool === "claude") {
+    const u = j.usage ?? {};
+    const input = sum(sum(u.input_tokens, u.cache_creation_input_tokens), u.cache_read_input_tokens);
+    return { text: j.result ?? "", tokens: { input, output: u.output_tokens ?? null, total: input + (u.output_tokens ?? 0), costUsd: j.total_cost_usd ?? null } };
+  }
+  if (tool === "cursor") {
+    const u = j.usage ?? {};
+    const input = sum(u.inputTokens, u.cacheReadTokens);
+    return { text: j.result ?? "", tokens: { input, output: u.outputTokens ?? null, total: input + (u.outputTokens ?? 0) } };
+  }
+  if (tool === "gemini") {
+    let input = 0, output = 0;
+    for (const m of Object.values(j.stats?.models ?? {})) { input += m.tokens?.input ?? m.tokens?.prompt ?? 0; output += m.tokens?.candidates ?? 0; }
+    return { text: j.response ?? "", tokens: { input, output, total: input + output } };
+  }
+  return { text: r.out, tokens: none };  // copilot: plain text, no usage report
+}
+
 const flag = (name) => { const i = process.argv.indexOf(`--${name}`); return i > 0 ? process.argv[i + 1] : undefined; };
 
 function run() {
@@ -170,14 +198,14 @@ function run() {
     r = runTool("codex", ["exec", "--skip-git-repo-check", "-s", "read-only", "-C", quote(workdir), "-m", model, "-o", quote(out), "-"],
       { input: fs.readFileSync(brief, "utf8"), timeout: 900_000 });
   } else if (tool === "claude") {
-    r = runTool("claude", ["-p", "--model", model, "--add-dir", quote(path.dirname(brief)), "--output-format", "text",
+    r = runTool("claude", ["-p", "--model", model, "--add-dir", quote(path.dirname(brief)), "--output-format", "json",
       "--allowedTools", "Read", "Grep", "Glob",
       "--disallowedTools", "Edit", "Write", "NotebookEdit", "Bash", "PowerShell", "WebFetch", "WebSearch"],
       { input: ask, cwd: workdir, timeout: 900_000 });
   } else if (tool === "gemini") {
     // Gemini CLI: plan mode is its read-only mode; --skip-trust lets it run headless. Signing in with a personal
     // Google account no longer works for scripted use, so it needs GEMINI_API_KEY (environment or ~/.gemini/.env).
-    r = runTool("gemini", ["-p", quote(ask), "-m", model, "--approval-mode", "plan", "--skip-trust", "-o", "text",
+    r = runTool("gemini", ["-p", quote(ask), "-m", model, "--approval-mode", "plan", "--skip-trust", "-o", "json",
       "--include-directories", quote(path.dirname(brief))], { cwd: workdir, timeout: 900_000 });
   } else if (tool === "cursor") {
     // Cursor's print mode can write and run commands by default. Ask mode is its read-only mode, the sandbox stays
@@ -185,7 +213,7 @@ function run() {
     // Cursor's sandbox exists only on macOS and Linux; on Windows, ask mode + no --force + Cursor's own command
     // allowlist + our working-tree check are the guard.
     const sandbox = process.platform === "win32" ? [] : ["--sandbox", "enabled"];
-    r = runTool(binOf("cursor"), ["-p", "--mode", "ask", ...sandbox, "--trust", "--output-format", "text",
+    r = runTool(binOf("cursor"), ["-p", "--mode", "ask", ...sandbox, "--trust", "--output-format", "json",
       "--model", model, "--workspace", quote(workdir), "--add-dir", quote(path.dirname(brief)), quote(ask)],
       { cwd: workdir, timeout: 900_000 });
   } else {
@@ -202,7 +230,9 @@ function run() {
     else if (/spend cap|usage limit|quota|rate.?limit|credits? (exhausted|exceeded)/i.test(errText)) { status = "capped"; exitCode = 4; note = errText.match(/.*(cap|limit|quota|credit).*/i)?.[0]?.trim(); }
     else { status = null; exitCode = 2; }
   }
-  if (tool !== "codex" && r.out) fs.writeFileSync(out, r.out);
+  // Claude, Cursor and Gemini answer in JSON so we can read the reply AND real token usage; Codex prints a total.
+  const { text, tokens } = parseReply(tool, r);
+  if (tool !== "codex" && text) fs.writeFileSync(out, text);
   fs.writeFileSync(out.replace(/\.md$/i, "") + ".log", `exit ${r.code}\n--- stderr ---\n${r.err}\n`);
   if (status) record(tool, model, status, note);
   // A cap that says to switch models (Cursor's per-model usage limits) blocks only this model; any other cap
@@ -212,7 +242,7 @@ function run() {
   const treeChanged = repo ? runTool("git", ["-C", quote(repo), "status", "--porcelain"]).out !== treeBefore : false;
   const reply = fs.existsSync(out) ? fs.readFileSync(out, "utf8") : "";
   const verdict = reply.match(/VERDICT:\s*(AGREE|REVISE)/i)?.[1]?.toUpperCase() ?? null;
-  console.log(JSON.stringify({ tool, model, exitCode: r.code, status, verdict, out, treeChanged, replyBytes: Buffer.byteLength(reply) }, null, 2));
+  console.log(JSON.stringify({ tool, model, exitCode: r.code, status, verdict, out, treeChanged, replyBytes: Buffer.byteLength(reply), tokens }, null, 2));
   process.exit(treeChanged ? 5 : exitCode);
 }
 

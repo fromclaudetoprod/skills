@@ -1,6 +1,6 @@
 {
   "name": "multi-model-review",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "Review code or a draft in several rounds, each by a different AI model (OpenAI Codex, Cursor CLI, Google Gemini CLI, GitHub Copilot CLI or Claude CLI), run locally and read-only, with Claude checking every claim and revising between rounds.",
   "author": { "name": "From Claude to Prod", "url": "https://www.fromclaudetoprod.dev" },
   "homepage": "https://www.fromclaudetoprod.dev",
