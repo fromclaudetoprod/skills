@@ -1,0 +1,12 @@
+{
+  "name": "from-claude-to-prod",
+  "owner": { "name": "From Claude to Prod", "url": "https://www.fromclaudetoprod.dev" },
+  "metadata": { "description": "Free Claude Code plugins from the From Claude to Prod channel." },
+  "plugins": [
+    {
+      "name": "multi-model-review",
+      "source": "./plugins/multi-model-review",
+      "description": "Several AI models review your code or draft in turn, read-only, with Claude checking every claim."
+    }
+  ]
+}
