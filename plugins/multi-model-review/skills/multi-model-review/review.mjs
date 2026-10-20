@@ -117,7 +117,7 @@ function options() {
   for (const [tool, t] of Object.entries(tools)) {
     if (!t.installed || t.capped) continue;
     for (const m of t.models) {
-      if (m.status === "unavailable") continue;
+      if (m.status === "unavailable" || m.status === "capped") continue;  // capped: until `record ... available`
       const cur = best.get(m.id);
       if (!cur || preference[tool] < preference[cur.tool]) best.set(m.id, { tool, ...m });
     }
