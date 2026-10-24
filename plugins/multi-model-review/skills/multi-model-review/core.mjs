@@ -313,9 +313,9 @@ export function repoFingerprint(repo) {
   h.update(git("status", "--porcelain"));
   const hasHead = runTool("git", ["-C", quote(repo), "rev-parse", "--verify", "-q", "HEAD"]).code === 0;
   h.update(hasHead ? git("diff", "HEAD", "--binary", "--no-ext-diff") : git("diff", "--cached", "--binary", "--no-ext-diff"));
-  for (const f of git("ls-files", "--others", "--exclude-standard", "-z").split(" ").filter(Boolean)) {
+  for (const f of git("ls-files", "--others", "--exclude-standard", "-z").split("\0").filter(Boolean)) {
     const abs = path.join(repo, f);
-    h.update(f + " ");
+    h.update(f + "\0");
     try { h.update(fs.readFileSync(abs)); } catch { h.update("unreadable"); }
   }
   return h.digest("hex");
