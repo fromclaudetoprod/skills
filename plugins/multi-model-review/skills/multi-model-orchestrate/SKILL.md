@@ -90,7 +90,7 @@ Show one table: `# · task · size · model · via · how it's paid · why` (why
    `No, pick another model`. A "No" re-asks with another pick. A label alone is not enough. The billing confirmation is never skipped, even if the user named the model.
 
 Also: offer rows with `writeStatus: "failed"` only with their warning ("experimental: may not write on this
-machine"). For Cursor on Windows, tell the user their Claude Code permission settings may ask them to approve the
+machine"). For Codex on Windows, say plainly that its sandbox may not write at all, or may write outside its folder (live test), and prefer another model. For Cursor on Windows, tell the user their Claude Code permission settings may ask them to approve the
 `--force` run, and that they are approving a Cursor worker that edits files in its worktree with no sandbox.
 
 ## 5. Start
@@ -133,7 +133,8 @@ Worker naming is `<model display name or id> via <Tool name CLI>`, e.g. `Grok 4.
    command inside the worktree. Never run migrations, pushes, deploys, or network calls outside the package manager;
    ask the user about anything else. Then send the worker back (`rework.md`). A failure caused by missing setup is
    not a fix round.
-6. Run the tests yourself in the worktree and save the log to exactly `<run>/tests/t1.log` (`start` creates only `briefs/`; make `tests/` and `diffs/` yourself). `commit` with `--tests passed` or `failed` refuses (exit 2) without a non-empty file at that path.
+6. Run the tests yourself in the worktree and save the log to exactly `<run>/tests/t1.log` (`start` creates only `briefs/`; make `tests/` and `diffs/` yourself). `commit` with `--tests passed` or `failed` refuses (exit 2) without a non-empty file at that path. Where the language allows, run tests with cache-writing off (`PYTHONDONTWRITEBYTECODE=1` for Python).
+   **Before `commit`** (it runs `git add -A`) compare `git -C "<wt>" status --porcelain` with the worker's `changedFiles` plus the files from its fix rounds. Delete untracked build or test artifacts the worker did not create (`__pycache__/`, `.pytest_cache/`, coverage output) that the repo does not ignore. Never delete a tracked file.
 7. **Gate.** `git -C "<wt>" add -N .` (deliberate, so the diff shows new files) then `git -C "<wt>" diff > "<run>/diffs/t1.patch"`.
    - *This session signs off:* read the diff and the test log; decide against the plan.
    - *Others sign off:* write a review brief at `<run>/briefs/t1-review/brief.md`, a folder of its own apart from the task's (diff pasted in, the task brief, the test log, ending in
