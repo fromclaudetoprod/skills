@@ -34,7 +34,7 @@ const TEST_STATES = ["passed", "failed", "not run"];
 const TASK_KEYS = ["title", "status", "worker", "tool", "model", "session", "reviewer", "fixRounds", "tests", "testLog", "commit", "note", "wave"];
 const MAX_TEXT = 500;
 
-export const runRoot = () => process.env.MMO_RUN_ROOT || path.join(os.homedir(), ".claude", "orchestrate");
+export const runRoot = () => process.env.MMO_RUN_ROOT || path.join(os.homedir(), "orchestrate-runs");
 export const today = () => {
   const d = new Date();
   const p = (n) => String(n).padStart(2, "0");
@@ -68,6 +68,17 @@ export function dirtyPaths(porcelain) {
   });
 }
 
+// Tools treat their own config folders as sensitive: Claude Code refuses even acceptEdits writes under ~/.claude.
+export const TOOL_CONFIG_DIRS = [".claude", ".codex", ".cursor", ".gemini"];
+// path.relative is case-insensitive on Windows, so this is too.
+const insideCI = (parent, child) => {
+  const rel = path.relative(parent, child);
+  return rel === "" || (rel !== ".." && !rel.startsWith(".." + path.sep) && !path.isAbsolute(rel));
+};
+export function toolConfigDirHit(rootDir, home = os.homedir()) {
+  return TOOL_CONFIG_DIRS.find((d) => insideCI(path.resolve(home, d), path.resolve(rootDir))) ?? null;
+}
+
 export function startRun({ repo, topic, root = runRoot(), date = today(), allowSubmodules = false }) {
   if (typeof topic !== "string" || !TOPIC.test(topic)) throw new UsageError(`topic must match ${TOPIC}: ${topic}`);
   const dir = safePath(repo ?? "", "repo");
@@ -83,6 +94,9 @@ export function startRun({ repo, topic, root = runRoot(), date = today(), allowS
   }
   const rootDir = safePath(root, "run root");
   if (inside(repoDir, rootDir)) throw new RunRefused(`the run folder must be outside the repository (MMO_RUN_ROOT is inside it): ${rootDir}`);
+
+  const cfg = toolConfigDirHit(rootDir);
+  if (cfg) throw new RunRefused(`the run folder must not be inside ~/${cfg} (${rootDir}): coding tools treat their own config folder as sensitive and refuse worker writes there. Use the default (~/orchestrate-runs) or set MMO_RUN_ROOT elsewhere`);
 
   const userBranch = branch.out.trim();
   const base = git(repoDir, "rev-parse", "HEAD").trim();

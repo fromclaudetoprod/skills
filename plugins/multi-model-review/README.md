@@ -175,7 +175,7 @@ Claude saves each task's test output in the run folder and will not record `Test
 you edit your own folder on purpose during a run, Claude shows you the change and asks; only on your yes does it
 `rebaseline` and carry on.
 
-Run folders (briefs, replies, diffs, test logs, token use) are in `~/.claude/orchestrate/<date>-<topic>/`. Set
+Run folders (briefs, replies, diffs, test logs, token use) are in `~/orchestrate-runs/<date>-<topic>/` (not under `~/.claude`: Claude Code refuses worker writes there). Set
 `MMO_RUN_ROOT` to move them. To pick up an interrupted run, say "continue the orchestrate run".
 
 ## Where things go

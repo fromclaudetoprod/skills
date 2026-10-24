@@ -58,9 +58,9 @@ says why. Fix rounds in patch mode tell the worker the folder already has its ea
 - On macOS and Linux it runs `--force` with `--sandbox enabled` and no warning.
 
 ## Long paths on Windows
-Worktrees live under `~/.claude/orchestrate/<date>-<topic>/wt/<id>/`, and a package install inside one
+Worktrees live under `~/orchestrate-runs/<date>-<topic>/wt/<id>/`, and a package install inside one
 (`node_modules` nests deeply) can pass Windows' 260-character MAX_PATH limit. If an install fails on a long path, set
-`MMO_RUN_ROOT=C:\mmo` (a short root) and start the run again.
+`MMO_RUN_ROOT=C:\mmo` (a short root; the default `~/orchestrate-runs` is already short) and start the run again.
 
 ## When a tool cannot write
 If a worker exits 0 but `changedFiles` is empty and its reply is not a legitimate "nothing to change":

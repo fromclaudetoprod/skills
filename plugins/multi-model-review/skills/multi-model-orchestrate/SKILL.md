@@ -165,7 +165,7 @@ soon as it passes, even while a sibling is still in fix rounds. The next wave st
 is `passed`, `stalled` or `skipped`.
 
 ## 8. Resume ("continue the orchestrate run")
-`status --run "<run>"` (list `~/.claude/orchestrate`, or `MMO_RUN_ROOT`, if the user does not give the folder). If
+`status --run "<run>"` (list `~/orchestrate-runs`, or `MMO_RUN_ROOT`, if the user does not give the folder). If
 `tipMatches` is false, stop and show why. Otherwise continue at the first task whose status is not `passed`. Read
 `rework.md` for stalled tasks.
 

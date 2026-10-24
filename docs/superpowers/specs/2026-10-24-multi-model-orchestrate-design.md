@@ -155,7 +155,7 @@ second option is the recommended one.
 ## How a run works
 
 ### Setup
-- Run folder `<R>` = `~/.claude/orchestrate/<yyyymmdd>-<short-topic>/`, next to the review skill's exchange folders:
+- Run folder `<R>` = `~/orchestrate-runs/<yyyymmdd>-<short-topic>/`, outside every tool's config folder (Claude Code refuses worker writes under `~/.claude`):
   briefs, replies, diffs, test logs and the ledger.
 - Private run branch `orchestrate/<short-topic>` from the user's current `HEAD`. If the user's working folder has
   uncommitted changes, note which files; they are not part of the run.

@@ -40,7 +40,7 @@ temp git repos, with no network and no real agent calls.
   `Rework-of:`. Worker naming is `<model display name or id> via <Tool name CLI>`, e.g. `Grok 4.7 High via Cursor CLI`.
 - `orchestrate.mjs` exit codes: 0 ok · 2 usage or unexpected error · 3 model unavailable · 4 capped · 5 something
   changed outside the worktree · 6 session not found · 7 preflight or landing refused · 8 nothing to commit.
-- Run root: `MMO_RUN_ROOT` env var, default `~/.claude/orchestrate`. Run folder `<root>/<yyyymmdd>-<topic>/`.
+- Run root: `MMO_RUN_ROOT` env var, default `~/orchestrate-runs`. Run folder `<root>/<yyyymmdd>-<topic>/`.
 - Commit messages follow the repo's plain style and end with
   `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>` (or the implementing model's own attribution line).
 

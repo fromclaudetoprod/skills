@@ -2,8 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import {
-  startRun, ensureWorktree, setTask, readLedger, runStatus, RunRefused,
+  startRun, runRoot, ensureWorktree, setTask, readLedger, runStatus, RunRefused,
 } from "../plugins/multi-model-review/skills/multi-model-orchestrate/run.mjs";
 import { repoFingerprint } from "../plugins/multi-model-review/skills/multi-model-review/core.mjs";
 import { tmpDir, runCli, git, makeRepo } from "./helpers.mjs";
@@ -173,4 +174,33 @@ test("status: tipMatches follows the passed tasks' commits", () => {
   assert.equal(s.runTip, c2);
   setTask(run, "t3", { status: "passed" });
   assert.equal(runStatus(run).tipMatches, false);
+});
+
+test("the default run root is not under any tool's config folder", async () => {
+  const { runRoot, toolConfigDirHit } = await import("../plugins/multi-model-review/skills/multi-model-orchestrate/run.mjs");
+  const saved = process.env.MMO_RUN_ROOT;
+  delete process.env.MMO_RUN_ROOT;
+  try {
+    assert.equal(toolConfigDirHit(runRoot()), null);
+    assert.ok(runRoot().endsWith("orchestrate-runs"));
+  } finally { if (saved !== undefined) process.env.MMO_RUN_ROOT = saved; }
+});
+
+test("refuses a run root inside ~/.claude, ~/.codex, ~/.cursor or ~/.gemini (any case)", async () => {
+  const { toolConfigDirHit } = await import("../plugins/multi-model-review/skills/multi-model-orchestrate/run.mjs");
+  const home = tmpDir("home");
+  for (const d of [".claude", ".codex", ".cursor", ".gemini"]) assert.equal(toolConfigDirHit(path.join(home, d, "orchestrate"), home), d);
+  assert.equal(toolConfigDirHit(path.join(home, ".claude"), home), ".claude");
+  assert.equal(toolConfigDirHit(path.join(home, ".claudex", "x"), home), null);
+  assert.equal(toolConfigDirHit(path.join(home, "orchestrate-runs"), home), null);
+  if (process.platform === "win32") assert.equal(toolConfigDirHit(path.join(home, ".CLAUDE", "x"), home), ".claude");
+});
+
+test("start refuses a run root under ~/.claude with exit 7 and a reason", () => {
+  const { repo } = setup();
+  const root = path.join(os.homedir(), ".claude", "orchestrate-test-never-created");
+  const r = runCli(CLI, ["start", "--repo", repo, "--topic", "demo"], { env: { MMO_RUN_ROOT: root } });
+  assert.equal(r.code, 7);
+  assert.match(r.json.reason, /must not be inside ~\/\.claude.*sensitive/);
+  assert.ok(!fs.existsSync(root));
 });
