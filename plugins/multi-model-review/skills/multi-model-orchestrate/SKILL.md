@@ -120,20 +120,23 @@ Worker naming is `<model display name or id> via <Tool name CLI>`, e.g. `Grok 4.
 3. Run the worker (in the background, 30-minute ceiling):
    ```
    node --no-deprecation "<this folder>/orchestrate.mjs" work --tool <tool> --model <id> --repo "<repository root>" \
-     --worktree "<wt>" --brief "<run>/briefs/t1/brief.md" --out "<run>/replies/t1-r1.md" [--session new]
+     --worktree "<wt>" --brief "<run>/briefs/t1/brief.md" --out "<run>/replies/t1-r1.md" \
+     --task <id> --budget <n> [--session new]
    ```
+   Always pass `--task <id> --budget <n>`. Show the user the per-tool running `totals` after every `work` call.
    Pass `--session new` for codex, claude, cursor and gemini, then store the printed `sessionId` with
-   `task --set session=<id>`; Copilot has no sessions. In patch mode, pass `--context <path>` (repeatable) for every existing file the task changes (the plan's Files list): their current contents are appended to the brief, because workers on Windows may not be able to read files. Output: `status`, `needs`, `changedFiles`, `outsideChanged`,
-   `mode`, `usage` and running `totals` (also in `<run>/replies/usage.jsonl`). `--mode write|patch` defaults to `patch`
+   `task --set session=<id>`; Copilot has no sessions. In patch mode, pass `--context <path>` (repeatable) for every existing file the task changes (the plan's Files list): their current contents are appended to the brief, because workers on Windows may not be able to read files. Never tell a worker to read a large folder (for example a framework's bundled docs); pass only the specific files or snippets it needs with `--context`. Output: `status`, `needs`, `changedFiles`, `outsideChanged`,
+   `mode`, `usage`, `taskSpent`, `budgetLeft`, `overBudget` and running `totals` (also in `<run>/replies/usage.jsonl`). `--mode write|patch` defaults to `patch`
    for codex and cursor on Windows and `write` elsewhere (see `tools.md`); the output also lists `isolationSkipped`
    (Codex MCP servers or plugins that could not be switched off). In **patch mode** the worker cannot edit files: it
-   replies with the complete new contents of each file it changes between `<<<FILE path=... code=CODE>>>` and `<<<END CODE>>>` lines (CODE is random per call; `<<<DELETE path=... code=CODE>>>` deletes; a final `<<<DONE code=CODE files=N deletes=M>>>` line is required), `work` builds the exact diff, validates it and applies it in the worktree (`patchApplied`, `patchError`,
+   replies with complete files between FILE and END markers (three angle brackets plus the word; the ask has the exact spelling). A DELETE marker removes a file. A final DONE marker gives the file and delete counts. `work` builds the exact diff, validates it and applies it in the worktree (`patchApplied`, `patchError`,
    and the diff saved beside the reply as `<out>.patch`). Tell patch-mode workers the task is whole files in the reply.
 4. **Exit codes of `work`:** 0 ok · 3 model unavailable: tell the user, offer the next row · 4 capped:
    `task --set status=stalled --set note="<tool> out of usage"` and offer another model · 5 something changed in the
    user's repo: **stop the run** and follow the exit-5 rule above (show `git status` and `diff`, ask, `rebaseline` only if the user says it was theirs) · 6 session not found (see `rework.md`) · 9 patch mode: the worker's files were missing or did not apply, which
    counts as a failed attempt: send the worker the `patchError` verbatim as a fix round (it re-sends complete files), and say the folder already has
    its earlier change if an earlier diff applied (`rework.md`) ·
+   10 task over budget, nothing run: stop that task and ask (Token budgets). `overBudget: true` on a finished run means the same ask; do not raise a budget without asking ·
    2 anything else: read the `.log` beside `--out`; retry once only if it shows a transient error (network or
    timeout), otherwise ask the user (a blind retry can bill a metered tool twice).
 5. **`needs`:** each entry is a command the worker asked for. Run it only if it is a setup, build, format or codegen
@@ -184,3 +187,8 @@ is `passed`, `stalled` or `skipped`.
 
 ## 10. Rework later ("send Task 3 back to its agent")
 Read `rework.md`.
+
+## Token budgets
+Default budgets are input plus output tokens per task, including fix rounds: light 150000, standard 400000, heavy 1000000.
+Exit 10 or `overBudget: true`: stop that task and ask the user to raise the budget, switch to another model, have Claude do it, or skip. Never raise a budget without asking.
+On a fix round, if the worker's last turn reported more than 200000 input tokens, start a fresh session (`--session new`) with the brief, the findings and `--context` files instead of resuming.

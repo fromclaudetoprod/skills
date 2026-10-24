@@ -31,8 +31,10 @@ export const defaultMode = (tool, platform = process.platform) => (platform === 
 const CODE_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 export const newCode = () => Array.from({ length: 6 }, () => CODE_CHARS[crypto.randomInt(CODE_CHARS.length)]).join("");
 
+// Pieces, not one token, so a source line is not itself a block delimiter.
+const marker = (word) => "<<<" + word;
 export const WORKER_PATCH_ASK = (briefPath, code = newCode()) =>
-  `${briefLead(briefPath)} and do what it asks, but you cannot edit files or run commands. Return your change as COMPLETE FILES, never as a diff. Use only the code given in this message. For every file you create or change, write a line \`<<<FILE path=<relative/path> code=${code}>>>\` on its own (for example \`<<<FILE path=src/a.ts code=${code}>>>\`), then the file's exact, complete new contents, then a line \`<<<END ${code}>>>\` on its own. The path is relative to the current folder. Backticks and any other characters inside the contents need no escaping; just never write a line that starts with <<<FILE, <<<END or <<<DELETE inside a file. The file is replaced exactly as you give it, so never abbreviate it or write "rest unchanged". To delete a file, write a line \`<<<DELETE path=<relative/path> code=${code}>>>\` outside any block. Write all other prose outside the blocks. After the last block write a final line \`<<<DONE code=${code} files=<number of FILE blocks> deletes=<number of DELETE lines>>>>\`; a reply without it is rejected as cut off. Never write a line containing <<< followed by FILE, END, DELETE or DONE except these delimiters. If the folder already contains your earlier change, base the file on its current contents. If you need a command run, add a line \`NEEDS: <command> because <reason>\` after the blocks.`;
+  `${briefLead(briefPath)} and do what it asks, but you cannot edit files or run commands. Return your change as COMPLETE FILES, never as a diff. Use only the code given in this message. For every file you create or change, write a line \`${marker("FILE")} path=<relative/path> code=${code}>>>\` on its own (for example \`${marker("FILE")} path=src/a.ts code=${code}>>>\`), then the file's exact, complete new contents, then a line \`${marker("END")} ${code}>>>\` on its own. The path is relative to the current folder. Backticks and any other characters inside the contents need no escaping; just never write a line that starts with ${marker("FILE")}, ${marker("END")} or ${marker("DELETE")} inside a file. The file is replaced exactly as you give it, so never abbreviate it or write "rest unchanged". To delete a file, write a line \`${marker("DELETE")} path=<relative/path> code=${code}>>>\` outside any block. Write all other prose outside the blocks. After the last block write a final line \`${marker("DONE")} code=${code} files=<number of FILE blocks> deletes=<number of DELETE lines>>>>\`; a reply without it is rejected as cut off. Never write a line containing <<< followed by FILE, END, DELETE or DONE except these delimiters. If the folder already contains your earlier change, base the file on its current contents. If you need a command run, add a line \`NEEDS: <command> because <reason>\` after the blocks.`;
 
 // Whole-file replies. Only lines that exactly match this call's start, end, delete or done pattern are delimiters;
 // content is everything between a start line and its end line, verbatim (CRs stripped, a leading BOM dropped).
@@ -41,17 +43,17 @@ export const WORKER_PATCH_ASK = (briefPath, code = newCode()) =>
 // call (this is the safe choice: a file that quotes delimiters, or a mangled delimiter, rejects the reply rather than
 // being guessed at; so a file with such a line cannot be written in patch mode); a non-delimiter line that contains the
 // code; an unclosed block; a start line inside a block; an END without a start; a path given twice (normalized:
-// leading ./ stripped, case-folded); a missing, repeated, early or miscounted <<<DONE code=C files=N deletes=M>>> line
+// leading ./ stripped, case-folded); a missing, repeated, early or miscounted done-marker line (code=C files=N deletes=M)
 // (it must follow every block; it catches a reply cut off before its last blocks). Error texts never contain the code.
 // Returns { files, deletes, outside } where outside is the prose with every block cut out.
 const pathKey = (p) => p.replace(/^(\.\/)+/, "").toLowerCase();
 const LOOKS_LIKE_DELIM = /<<<\s*(?:FILE|END|DELETE|DONE)/i;
 
 function scan(text, code) {
-  const start = new RegExp(`^<<<FILE path=(.+?) code=${code}>>>$`);
-  const del = new RegExp(`^<<<DELETE path=(.+?) code=${code}>>>$`);
-  const done = new RegExp(`^<<<DONE code=${code} files=(\\d+) deletes=(\\d+)>>>$`);
-  const end = `<<<END ${code}>>>`;
+  const start = new RegExp("^" + marker("FILE") + ` path=(.+?) code=${code}>>>$`);
+  const del = new RegExp("^" + marker("DELETE") + ` path=(.+?) code=${code}>>>$`);
+  const done = new RegExp("^" + marker("DONE") + ` code=${code} files=(\\d+) deletes=(\\d+)>>>$`);
+  const end = marker("END") + ` ${code}>>>`;
   const lines = String(text ?? "").replace(/^\uFEFF/, "").split(/\r?\n/);
   const files = [], deletes = [], outside = [], seen = new Set();
   let counts = null;
@@ -65,7 +67,7 @@ function scan(text, code) {
     const line = lines[i];
     const s = line.match(start);
     if (s) {
-      if (counts) throw new Error(`a file block (line ${i + 1}) after the <<<DONE line`);
+      if (counts) throw new Error(`a file block (line ${i + 1}) after the ${marker("DONE")} line`);
       const body = [];
       let closed = false;
       for (i++; i < lines.length; i++) {
@@ -80,23 +82,23 @@ function scan(text, code) {
     }
     const d = line.match(del);
     if (d) {
-      if (counts) throw new Error(`a delete line (${i + 1}) after the <<<DONE line`);
+      if (counts) throw new Error(`a delete line (${i + 1}) after the ${marker("DONE")} line`);
       note(d[1]); deletes.push(d[1]); continue;
     }
     const dn = line.match(done);
     if (dn) {
-      if (counts) throw new Error("more than one <<<DONE line");
+      if (counts) throw new Error("more than one " + marker("DONE") + " line");
       counts = [Number(dn[1]), Number(dn[2])];
       continue;
     }
-    if (line === end) throw new Error("a <<<END line with no block open");
+    if (line === end) throw new Error("a " + marker("END") + " line with no block open");
     if (suspicious(line)) throw new Error(`line ${i + 1} looks like a block delimiter but is not an exact one for this reply (wrong or missing code, wrong case, indentation, backticks or other characters)`);
     outside.push(line);
   }
   if (files.length || deletes.length || counts) {
-    if (!counts) throw new Error("the reply has no final <<<DONE line, so it may be cut off");
+    if (!counts) throw new Error("the reply has no final " + marker("DONE") + " line, so it may be cut off");
     if (counts[0] !== files.length || counts[1] !== deletes.length) {
-      throw new Error(`the <<<DONE line says ${counts[0]} files and ${counts[1]} deletes but the reply has ${files.length} files and ${deletes.length} deletes`);
+      throw new Error("the " + marker("DONE") + ` line says ${counts[0]} files and ${counts[1]} deletes but the reply has ${files.length} files and ${deletes.length} deletes`);
     }
   }
   return { files, deletes, outside: outside.join("\n") };
@@ -432,6 +434,13 @@ export function work(args) {
   if (!model || !MODEL_ID.test(model)) fail(`--model is missing or not a valid model id: ${model}`);
   if (session !== undefined && session !== "new" && !SESSION_ID.test(session)) fail(`--session must be "new" or a session id: ${session}`);
   if (session && !SESSION_TOOLS.includes(tool)) fail(`--session is not supported for ${tool}; use one of ${SESSION_TOOLS.join(", ")}`);
+  const TASK_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,40}$/;
+  const task = flag(args, "task");
+  const budgetArg = flag(args, "budget");
+  if (args.includes("--task") && (task === undefined || !TASK_ID.test(task))) fail(`--task must match ${TASK_ID}: ${task}`);
+  if (args.includes("--budget") && (budgetArg === undefined || !/^[1-9][0-9]*$/.test(budgetArg))) fail(`--budget must be a positive integer: ${budgetArg}`);
+  if (budgetArg !== undefined && task === undefined) fail("--budget requires --task");
+  const budget = budgetArg === undefined ? null : Number(budgetArg);
   const brief = safePath(flag(args, "brief") ?? fail("--brief is required"), "brief");
   const worktree = safePath(flag(args, "worktree") ?? fail("--worktree is required"), "worktree");
   const out = safePath(flag(args, "out") ?? fail("--out is required"), "out");
@@ -462,6 +471,16 @@ export function work(args) {
   // --context <path> (repeatable): the current contents of existing files, appended to the brief. Workers on Windows
   // may not be able to read the folder at all. Validated here, with the other arguments, before any side effect.
   const ctxParts = flags(args, "context").map((c) => contextSection(worktree, c));
+  const usageFile = path.join(path.dirname(out), "usage.jsonl");
+  const usageRows = () => (fs.existsSync(usageFile) ? jsonObjects(fs.readFileSync(usageFile, "utf8")) : []);
+  const spentOn = (rows, id) => rows.reduce((n, row) => (row.task === id ? n + (row.inputTokens ?? 0) + (row.outputTokens ?? 0) : n), 0);
+  if (budget !== null) {
+    const soFar = spentOn(usageRows(), task);
+    if (soFar >= budget) {
+      console.log(JSON.stringify({ tool, model, exitCode: null, status: null, overBudget: true, taskSpent: soFar, budget, out }, null, 2));
+      process.exit(10);
+    }
+  }
   const code = newCode();
   let repoBefore;
   try { repoBefore = repoFingerprint(repo); } catch (e) { fail(e.message); }
@@ -493,9 +512,12 @@ export function work(args) {
   fs.writeFileSync(out.replace(/\.md$/i, "") + ".log", `exit ${r.code}\nmode ${mode}\n${tool === "codex" ? `isolation skipped (left enabled): ${JSON.stringify(iso.skipped)}\n` : ""}--- stderr ---\n${r.err}\n${text === null && tool !== "codex" ? "" : `--- stdout ---\n${r.out}\n`}`);
   recordOutcome(tool, model, outcome, r);
 
-  const usageFile = path.join(path.dirname(out), "usage.jsonl");
-  if (usage) fs.appendFileSync(usageFile, JSON.stringify({ at: new Date().toISOString(), tool, model, sessionId, reply: path.basename(out), ...usage }) + "\n");
-  const totals = sumUsage(fs.existsSync(usageFile) ? jsonObjects(fs.readFileSync(usageFile, "utf8")) : []);
+  if (usage) fs.appendFileSync(usageFile, JSON.stringify({ at: new Date().toISOString(), tool, model, sessionId, reply: path.basename(out), ...usage, task: task ?? null }) + "\n");
+  const rows = usageRows();
+  const totals = sumUsage(rows);
+  const taskSpent = spentOn(rows, task ?? null);
+  const budgetLeft = budget === null ? null : budget - taskSpent;
+  const overBudget = budget !== null && taskSpent > budget;
 
   const outsideChanged = repoFingerprint(repo) !== repoBefore;
   const reply = fs.existsSync(out) ? fs.readFileSync(out, "utf8") : "";
@@ -509,7 +531,7 @@ export function work(args) {
       let patch = null;
       try {
         const ex = extractFiles(reply, code);
-        if (!ex) error = `patch rejected: no <<<FILE or <<<DELETE block found in the reply`;
+        if (!ex) error = "patch rejected: no " + marker("FILE") + " or " + marker("DELETE") + " block found in the reply";
         else {
           patch = buildPatch(worktree, ex.files, ex.deletes);
           if (!patch) error = "patch rejected: every file in the reply is identical to the current file, so there is nothing to change";
@@ -523,6 +545,7 @@ export function work(args) {
   const changedFiles = porcelain(worktree).out.split(/\r?\n/).filter(Boolean)
     .map((l) => l.slice(3).replace(/^.* -> /, "").replace(/^"(.*)"$/, "$1"));
   console.log(JSON.stringify({ tool, model, exitCode: r.code, status: outcome.status, out, sessionId: session ? sessionId : undefined,
-    usage, totals, needs: parseNeeds(reply, mode === "patch" ? code : undefined), changedFiles, outsideChanged, mode, ...patchOut, isolationSkipped: iso.skipped }, null, 2));
+    usage, totals, needs: parseNeeds(reply, mode === "patch" ? code : undefined), changedFiles, outsideChanged, mode, ...patchOut, isolationSkipped: iso.skipped,
+    task: task ?? null, taskSpent, budget, budgetLeft, overBudget }, null, 2));
   process.exit(outsideChanged ? 5 : outcome.exitCode !== 0 ? outcome.exitCode : patchOut.patchError ? 9 : 0);
 }
