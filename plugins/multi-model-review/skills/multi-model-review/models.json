@@ -29,5 +29,13 @@
       { "model": "claude-sonnet-5-5", "why": "an independent Claude read at lower cost" }
     ]
   },
-  "notForReview": ["(^|[-.])mini($|[-.])", "flash", "haiku", "-fast$", "(^|[-.])lite($|[-.])", "(^|[-.])nano($|[-.])"]
+  "notForReview": ["(^|[-.])mini($|[-.])", "flash", "haiku", "-fast$", "(^|[-.])lite($|[-.])", "(^|[-.])nano($|[-.])"],
+  "_workersReadme": "Size tiers for orchestrate workers. Unlike review, small and fast models are welcome here.",
+  "workers": {
+    "claude": { "light": ["claude-haiku-5-5"], "standard": ["claude-sonnet-5-5"], "heavy": ["claude-opus-5-5"] },
+    "codex": { "light": ["gpt-6-luna"], "standard": ["gpt-6-sol"], "heavy": ["gpt-6.1-sol"] },
+    "cursor": { "standard": ["grok-4.7-medium"], "heavy": ["grok-4.7-high"] },
+    "gemini": { "standard": ["gemini-3.1-pro"], "heavy": ["gemini-4-argon"] },
+    "copilot": { "light": ["claude-haiku-5.5"], "standard": ["claude-sonnet-5.5"], "heavy": ["gpt-6.1-sol"] }
+  }
 }
