@@ -51,6 +51,15 @@ export function runTool(cmd, args, { input, cwd, timeout = 60_000 } = {}) {
 
 // git without a shell: raw arguments are safe here (no quote()). Only for git, which is a real executable on every OS;
 // the other CLIs are .cmd shims and stay on runTool. Returns {code, out, err, spawnError}.
+// Read-only flags per tool, shared by review rounds and patch-mode workers. `resume` is for a resumed Codex turn,
+// which has no -s flag. Cursor's sandbox exists only on macOS and Linux; ask mode and no --force are the guard.
+export function readOnlyArgs(tool, { resume = false, platform = process.platform } = {}) {
+  if (tool === "codex") return resume ? ["-c", "sandbox_mode=read-only"] : ["-s", "read-only"];
+  if (tool === "gemini") return ["--approval-mode", "plan"];
+  if (tool === "cursor") return ["--mode", "ask", ...(platform === "win32" ? [] : ["--sandbox", "enabled"])];
+  throw new Error(`no read-only flags for ${tool}`);
+}
+
 export function runGit(dir, args, { input, timeout = 120_000 } = {}) {
   const r = spawnSync("git", ["-C", dir, ...args], { encoding: "utf8", shell: false, input, timeout, maxBuffer: 64 * 1024 * 1024 });
   return { code: r.status, out: r.stdout ?? "", err: r.stderr ?? "", spawnError: r.error ?? null };

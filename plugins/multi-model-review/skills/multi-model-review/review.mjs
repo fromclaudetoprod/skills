@@ -26,7 +26,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { TOOLS, SESSION_TOOLS, MODEL_ID, SESSION_ID, UsageError, safePath, quote, runTool, binOf, detect, menu, plan, record,
+import { readOnlyArgs, TOOLS, SESSION_TOOLS, MODEL_ID, SESSION_ID, UsageError, safePath, quote, runTool, binOf, detect, menu, plan, record,
   jsonObjects, sumUsage, parseResult, classifyFailure, recordOutcome, repoFingerprint } from "./core.mjs";
 
 const fail = (message) => { throw new UsageError(message); };
@@ -55,8 +55,8 @@ function run() {
     // `codex exec resume` has no -s flag, so the read-only sandbox is set through config on resumed turns.
     const common = ["--json", "--skip-git-repo-check", "-m", model, "-o", quote(out)];
     const args = resume
-      ? ["exec", "resume", ...common, "-c", "sandbox_mode=read-only", resume, "-"]
-      : ["exec", ...common, "-s", "read-only", "-C", quote(workdir), "-"];
+      ? ["exec", "resume", ...common, ...readOnlyArgs("codex", { resume: true }), resume, "-"]
+      : ["exec", ...common, ...readOnlyArgs("codex"), "-C", quote(workdir), "-"];
     r = runTool("codex", args, { input: fs.readFileSync(brief, "utf8"), cwd: workdir, timeout: 900_000 });
   } else if (tool === "claude") {
     // Only the three read tools exist for the reviewer (--tools), and no MCP servers, skills or user settings are
@@ -75,7 +75,7 @@ function run() {
     // Its sessions are kept per project folder, so every turn of one conversation runs from the same workdir.
     sid = session === "new" ? crypto.randomUUID() : null;
     r = runTool("gemini", ["-p", quote(ask), "-m", model, ...(resume ? ["--resume", resume] : sid ? ["--session-id", sid] : []),
-      "--approval-mode", "plan", "--skip-trust", "-o", "json", "--include-directories", quote(path.dirname(brief))],
+      ...readOnlyArgs("gemini"), "--skip-trust", "-o", "json", "--include-directories", quote(path.dirname(brief))],
       { cwd: workdir, timeout: 900_000 });
   } else if (tool === "cursor") {
     // Cursor's print mode can write and run commands by default. Ask mode is its read-only mode, the sandbox stays
@@ -87,8 +87,7 @@ function run() {
       chat = c.out.trim().split(/\r?\n/).pop()?.trim();
       if (c.code !== 0 || !chat || !SESSION_ID.test(chat)) fail(`could not start a Cursor chat: ${c.err || c.out}`.trim());
     }
-    const sandbox = process.platform === "win32" ? [] : ["--sandbox", "enabled"];
-    r = runTool(binOf("cursor"), ["-p", "--mode", "ask", ...sandbox, "--trust", "--output-format", "json",
+    r = runTool(binOf("cursor"), ["-p", ...readOnlyArgs("cursor"), "--trust", "--output-format", "json",
       "--model", model, ...(chat ? ["--resume", chat] : []),
       "--workspace", quote(workdir), "--add-dir", quote(path.dirname(brief)), quote(ask)],
       { cwd: workdir, timeout: 900_000 });

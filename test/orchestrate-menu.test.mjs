@@ -21,19 +21,28 @@ test("haiku is offered and tagged light", () => {
   assert.deepEqual(r.tiers, ["light"]);
 });
 
-test("cursor warns only on Windows", () => {
+const PATCH_NOTE = "patch mode on Windows: proposes a diff, Claude applies it";
+
+test("cursor is in patch mode on Windows; the force warning applies only to --mode write", () => {
   fresh();
-  assert.ok(rows("win32").find((x) => x.tool === "cursor").warnings.includes("⚠ force, no sandbox"));
-  assert.ok(!rows("darwin").find((x) => x.tool === "cursor").warnings.includes("⚠ force, no sandbox"));
+  const win = rows("win32").find((x) => x.tool === "cursor"), mac = rows("darwin").find((x) => x.tool === "cursor");
+  assert.deepEqual(win.warnings, [PATCH_NOTE]);
+  assert.deepEqual(win.writeWarnings, ["⚠ force, no sandbox"]);
+  assert.equal(win.mode, "patch");
+  assert.deepEqual(mac.warnings, []);
+  assert.deepEqual(mac.writeWarnings, []);
+  assert.equal(mac.mode, "write");
 });
 
-test("codex warns only on Windows", () => {
+test("codex is in patch mode on Windows; the sandbox warning applies only to --mode write", () => {
   fresh();
   const w = "⚠ Windows sandbox: may not write, or may write outside its folder";
   const withCodex = () => ({ tools: { codex: { installed: true, capped: false, catalog: true, models: [model("gpt-5.5", "OpenAI")] } } });
   const codexRow = (platform) => workerMenu({ platform, detectFn: withCodex, env: {} }).find((x) => x.tool === "codex");
-  assert.ok(codexRow("win32").warnings.includes(w));
-  assert.ok(!codexRow("darwin").warnings.includes(w));
+  assert.deepEqual(codexRow("win32").warnings, [PATCH_NOTE]);
+  assert.deepEqual(codexRow("win32").writeWarnings, [w]);
+  assert.deepEqual(codexRow("darwin").warnings, []);
+  assert.deepEqual(codexRow("darwin").writeWarnings, []);
 });
 
 test("failed write test marks experimental", () => {

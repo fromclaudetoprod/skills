@@ -6,7 +6,7 @@ import { pathToFileURL } from "node:url";
 import {
   detect, billingOf, accessFile, readJson, writeJson, MODELS_FILE, familyOf, TOOLS, TOOL_PREFERENCE, UsageError,
 } from "../multi-model-review/core.mjs";
-import { work } from "./workers.mjs";
+import { work, defaultMode } from "./workers.mjs";
 import { start, task, worktree, status, commit, land, discard, rebaselineCmd, RunRefused } from "./run.mjs";
 
 const TIER_ORDER = ["heavy", "standard", "light"];
@@ -29,13 +29,17 @@ export function workerMenu({ platform = process.platform, detectFn = detect, env
     for (const m of [...t.models, ...extra]) {
       if (m.status === "unavailable" || m.status === "capped") continue;
       const tiers = TIER_ORDER.filter((tier) => (workers[tool]?.[tier] ?? []).includes(m.id));
-      const warnings = [];
-      if (tool === "cursor" && platform === "win32") warnings.push("⚠ force, no sandbox");
-      if (tool === "codex" && platform === "win32") warnings.push("⚠ Windows sandbox: may not write, or may write outside its folder");
+      const warnings = [], writeWarnings = [];
+      // On Windows Codex and Cursor run in patch mode (read-only, they propose a diff). The write-mode warnings
+      // apply only if the user overrides with --mode write.
+      if (tool === "cursor" && platform === "win32") writeWarnings.push("⚠ force, no sandbox");
+      if (tool === "codex" && platform === "win32") writeWarnings.push("⚠ Windows sandbox: may not write, or may write outside its folder");
+      if (defaultMode(tool, platform) === "patch") warnings.push("patch mode on Windows: proposes a diff, Claude applies it");
       if (writeStatus === "failed") warnings.push("experimental: may not write on this machine");
       rows.push({ tool, model: m.id, name: m.name, family: m.family, status: m.status, tiers,
         source: b.source, paidBy: b.paidBy, billing: b.label, sameBudgetAsSession: b.sameBudgetAsSession,
-        needsConfirm: b.needsConfirm, writeStatus, warnings });
+        needsConfirm: b.needsConfirm, writeStatus, warnings, writeWarnings,
+        mode: defaultMode(tool, platform) });
     }
   }
   const best = (r) => (r.tiers.length ? TIER_ORDER.indexOf(r.tiers[0]) : TIER_ORDER.length);
