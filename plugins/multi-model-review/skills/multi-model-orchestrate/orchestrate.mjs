@@ -7,6 +7,7 @@ import {
   detect, billingOf, accessFile, readJson, writeJson, MODELS_FILE, familyOf, TOOLS, TOOL_PREFERENCE, UsageError,
 } from "../multi-model-review/core.mjs";
 import { work } from "./workers.mjs";
+import { start, task, worktree, status, RunRefused } from "./run.mjs";
 
 const TIER_ORDER = ["heavy", "standard", "light"];
 
@@ -61,6 +62,7 @@ const COMMANDS = {
   menu: (args) => console.log(JSON.stringify(workerMenu({ platform: flag(args, "--platform") ?? process.platform }), null, 2)),
   "record-write": (args) => { recordWrite(args[0], args[1], args[2]); console.log('{"ok":true}'); },
   work,
+  start, task, worktree, status,
 };
 
 function main() {
@@ -71,5 +73,9 @@ function main() {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
-  try { main(); } catch (e) { console.error(e instanceof Error ? e.message : String(e)); process.exit(2); }
+  try { main(); } catch (e) {
+    // A refusal (exit 7) also prints its reason as JSON so callers can read it from stdout.
+    if (e instanceof RunRefused) { console.log(JSON.stringify({ ok: false, reason: e.reason })); console.error(e.reason); process.exit(e.exitCode); }
+    console.error(e instanceof Error ? e.message : String(e)); process.exit(2);
+  }
 }
