@@ -1,19 +1,34 @@
 // A multi-model run: the run branch, the run folder, per-task worktrees and the ledger that survives restarts.
-// Zero dependencies. Every git call goes through runTool with a quoted, validated path.
+// Zero dependencies. Every git call goes through runGit (no shell), so paths and text need no quoting.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
-  TOOLS, MODEL_ID, SESSION_ID, UsageError, safePath, quote, runTool, readJson, writeJson, repoFingerprint,
+  TOOLS, MODEL_ID, SESSION_ID, UsageError, safePath, runGit, readJson, repoFingerprint,
 } from "../multi-model-review/core.mjs";
 
 // A preflight or landing refusal. The CLI exits 7 and prints the reason.
 export class RunRefused extends Error {
   constructor(reason) { super(reason); this.name = "RunRefused"; this.reason = reason; this.exitCode = 7; }
 }
+// Refusals with their own exit code. All print {ok:false, reason} and exit with exitCode.
+export class OutsideChange extends RunRefused {
+  constructor(reason) { super(reason); this.name = "OutsideChange"; this.exitCode = 5; }
+}
+export class NothingToCommit extends RunRefused {
+  constructor(reason) { super(reason); this.name = "NothingToCommit"; this.exitCode = 8; }
+}
+export class Conflict extends RunRefused {
+  constructor(reason, files = []) { super(reason); this.name = "Conflict"; this.files = files; }
+}
 
 const TOPIC = /^[a-z0-9][a-z0-9-]{0,40}$/;
 const TASK_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,40}$/;
+// A task id becomes part of a branch name and a folder name, so also refuse what git refuses in a ref.
+const validId = (id) => typeof id === "string" && TASK_ID.test(id) && !id.includes("..") && !id.endsWith(".lock") && !id.endsWith(".");
+const checkId = (id) => {
+  if (!validId(id)) throw new UsageError(`task id must match ${TASK_ID} and must not contain "..", end in ".lock" or end in ".": ${id}`);
+};
 const STATUSES = ["pending", "running", "passed", "stalled", "skipped", "failed"];
 const TEST_STATES = ["passed", "failed", "not run"];
 const TASK_KEYS = ["title", "status", "worker", "tool", "model", "session", "reviewer", "fixRounds", "tests", "commit", "note", "wave"];
@@ -28,13 +43,13 @@ export const today = () => {
 
 // Run git in dir. Returns {code, out, err}; throws only when git cannot be started.
 function gitRaw(dir, ...args) {
-  const r = runTool("git", ["-C", quote(dir), ...args], { timeout: 120_000 });
+  const r = runGit(dir, args);
   if (r.spawnError) throw new Error(`could not run git: ${r.spawnError.message}`);
   return r;
 }
 function git(dir, ...args) {
   const r = gitRaw(dir, ...args);
-  if (r.code !== 0) throw new Error(`git ${args[0]} failed in ${dir}: ${r.err.trim()}`);
+  if (r.code !== 0) throw new Error(`git ${args.find((a) => !a.startsWith("-") && !a.includes("=")) ?? args[0]} failed in ${dir}: ${r.err.trim()}`);
   return r.out;
 }
 
@@ -83,7 +98,7 @@ export function startRun({ repo, topic, root = runRoot(), date = today(), allowS
   const runWorktree = path.join(run, "wt", "_run");
 
   fs.mkdirSync(path.join(run, "briefs"), { recursive: true });
-  git(repoDir, "worktree", "add", "-b", runBranch, quote(runWorktree), "HEAD");
+  git(repoDir, "worktree", "add", "-b", runBranch, runWorktree, "HEAD");
   const dirty = dirtyPaths(userStatusAtStart);
   writeLedger(run, { version: 1, topic, repo: repoDir, base, userBranch, runBranch, runWorktree, userStatusAtStart,
     userFingerprintAtStart, dirty, createdAt: new Date().toISOString(), tasks: {} });
@@ -112,8 +127,13 @@ export function renderLedger(ledger) {
   return lines.join("\n") + "\n";
 }
 
+// Write to a temp file and rename it into place, so a crash never leaves half a ledger.
 export function writeLedger(run, ledger) {
-  writeJson(ledgerFile(run), ledger);
+  fs.mkdirSync(run, { recursive: true });
+  const file = ledgerFile(run);
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(ledger, null, 2) + "\n");
+  fs.renameSync(tmp, file);
   fs.writeFileSync(path.join(run, "ledger.md"), renderLedger(ledger));
 }
 
@@ -136,7 +156,7 @@ function checkField(key, value) {
 }
 
 export function setTask(run, id, fields) {
-  if (typeof id !== "string" || !TASK_ID.test(id)) throw new UsageError(`task id must match ${TASK_ID}: ${id}`);
+  checkId(id);
   const dir = safePath(run ?? "", "run");
   const ledger = readLedger(dir);
   const clean = {};
@@ -150,19 +170,20 @@ export function setTask(run, id, fields) {
 }
 
 export function ensureWorktree(run, id) {
-  if (typeof id !== "string" || !TASK_ID.test(id)) throw new UsageError(`task id must match ${TASK_ID}: ${id}`);
+  checkId(id);
   const dir = safePath(run ?? "", "run");
   const ledger = readLedger(dir);
   const branch = `orchestrate/${ledger.topic}--${id}`;
   const wt = path.join(dir, "wt", id);
   if (fs.existsSync(wt)) {
-    const head = gitRaw(wt, "symbolic-ref", "-q", "--short", "HEAD");
+    const head = fs.existsSync(path.join(wt, ".git")) ? gitRaw(wt, "symbolic-ref", "-q", "--short", "HEAD") : { code: 1, out: "" };
     if (head.code === 0 && head.out.trim() === branch) return { path: wt, branch, created: false };
     throw new RunRefused(`${wt} exists but is not a worktree on ${branch}`);
   }
+  gitRaw(ledger.repo, "worktree", "prune"); // forget worktrees whose folder was deleted by hand
   const branchExists = gitRaw(ledger.repo, "show-ref", "--verify", "-q", `refs/heads/${branch}`).code === 0;
-  if (branchExists) git(ledger.repo, "worktree", "add", quote(wt), branch);
-  else git(ledger.repo, "worktree", "add", "-b", branch, quote(wt), ledger.runBranch);
+  if (branchExists) git(ledger.repo, "worktree", "add", wt, branch);
+  else git(ledger.repo, "worktree", "add", "-b", branch, wt, ledger.runBranch);
   return { path: wt, branch, created: true };
 }
 
@@ -187,6 +208,139 @@ export function runStatus(run) {
   return { ...ledger, runTip, tipMatches };
 }
 
+// ---- commit and land ----
+
+// The committer identity comes from the user's own git config; CI machines may have none.
+function identity(repo) {
+  const get = (k, dflt) => { const r = gitRaw(repo, "config", "--get", k); return r.code === 0 && r.out.trim() ? r.out.trim() : dflt; };
+  return ["-c", `user.name=${get("user.name", "Orchestrate")}`, "-c", `user.email=${get("user.email", "orchestrate@localhost")}`];
+}
+
+// Commit messages go to git by file, never as an argument. The file is removed afterwards.
+function withMessage(run, name, message, fn) {
+  const file = path.join(run, name);
+  fs.writeFileSync(file, message.endsWith("\n") ? message : message + "\n");
+  try { return fn(file); } finally { fs.rmSync(file, { force: true }); }
+}
+
+// Every changed or untracked file in dir (a rename gives the new path).
+function statusPaths(dir) {
+  const parts = git(dir, "status", "--porcelain=v1", "-z", "-uall").split("\0");
+  const out = [];
+  for (let i = 0; i < parts.length; i++) {
+    const e = parts[i];
+    if (e.length < 4) continue;
+    out.push(e.slice(3));
+    if (e[0] === "R" || e[0] === "C") i++; // the next entry is the old name
+  }
+  return out;
+}
+
+export function commitTask(run, id, { title, tests, reworkOf } = {}) {
+  checkId(id);
+  const dir = safePath(run ?? "", "run");
+  const ledger = readLedger(dir);
+  const t = ledger.tasks[id] ?? {};
+  const testsValue = checkField("tests", tests);
+  const subject = checkField("title", title ?? t.title ?? "");
+  if (!subject.trim()) throw new UsageError("a commit needs a title: pass --title or set the task's title");
+  if (reworkOf !== undefined) checkField("commit", reworkOf);
+
+  // 1. Nothing in the user's folder may have changed since the run started. The fingerprint also catches a
+  //    further edit to a file that was already dirty, which the status text alone would miss.
+  if (repoFingerprint(ledger.repo) !== ledger.userFingerprintAtStart) {
+    throw new OutsideChange("the user's folder changed since the run started; nothing was committed. Find out what wrote there before continuing");
+  }
+  // 2. The task must have changed something.
+  const wt = path.join(dir, "wt", id);
+  const branch = `orchestrate/${ledger.topic}--${id}`;
+  if (!fs.existsSync(wt)) throw new RunRefused(`no worktree for task ${id}: ${wt}`);
+  if (git(wt, "status", "--porcelain").trim() === "") throw new NothingToCommit(`task ${id} changed nothing in its worktree`);
+
+  // 3. Commit in the task worktree, with the agent trailers.
+  const trailers = [];
+  if (t.worker) trailers.push(`Implemented-by: ${t.worker}`);
+  if (t.tool && t.session) trailers.push(`Worker-session: ${t.tool} ${t.session}`);
+  if (t.reviewer) trailers.push(`Reviewed-by: ${t.reviewer}`);
+  trailers.push(`Fix-rounds: ${t.fixRounds ?? 0}`);
+  trailers.push(`Tests: ${testsValue}`);
+  if (reworkOf) trailers.push(`Rework-of: ${reworkOf}`);
+  const who = identity(ledger.repo);
+  git(wt, "add", "-A");
+  withMessage(dir, `commit-msg-${id}.txt`, `${subject}\n\n${trailers.join("\n")}\n`, (file) =>
+    git(wt, ...who, "commit", "-q", "--cleanup=verbatim", "-F", file));
+  const taskCommit = git(wt, "rev-parse", "HEAD").trim();
+  const files = git(wt, "diff-tree", "--no-commit-id", "--name-only", "-r", "-z", taskCommit).split("\0").filter(Boolean);
+
+  // 4. Put it on the run branch.
+  const pick = gitRaw(ledger.runWorktree, ...who, "cherry-pick", taskCommit);
+  if (pick.code !== 0) {
+    const conflicted = gitRaw(ledger.runWorktree, "diff", "--name-only", "--diff-filter=U", "-z").out.split("\0").filter(Boolean);
+    gitRaw(ledger.runWorktree, "cherry-pick", "--abort");
+    const what = conflicted.length ? `in: ${conflicted.join(", ")}` : `(${pick.err.trim()})`;
+    throw new Conflict(`task ${id} conflicts with the run branch ${what}. Its worktree is kept at ${wt}`, conflicted);
+  }
+  const commit = git(ledger.runWorktree, "rev-parse", "HEAD").trim();
+
+  // 5. The task's worktree and branch are done with.
+  git(ledger.repo, "worktree", "remove", "--force", wt);
+  gitRaw(ledger.repo, "branch", "-D", branch);
+
+  // 6. Record it.
+  setTask(dir, id, { status: "passed", commit, tests: testsValue });
+  return { commit, files };
+}
+
+export function landRun(run, { mode = "merge" } = {}) {
+  if (!["merge", "squash", "uncommitted"].includes(mode)) throw new UsageError(`mode must be merge, squash or uncommitted: ${mode}`);
+  const dir = safePath(run ?? "", "run");
+  const ledger = readLedger(dir);
+  const { repo, base, runBranch, topic } = ledger;
+
+  const here = gitRaw(repo, "symbolic-ref", "-q", "--short", "HEAD");
+  if (here.code !== 0 || here.out.trim() !== ledger.userBranch) {
+    const now = here.code === 0 ? here.out.trim() : "a detached HEAD";
+    throw new RunRefused(`the user's folder is on ${now}, not ${ledger.userBranch}; switch back and land again`);
+  }
+  const changed = git(repo, "diff", "--name-only", "-z", `${base}..${runBranch}`).split("\0").filter(Boolean);
+  const dirty = new Set(statusPaths(repo));
+  const overlap = changed.filter((f) => dirty.has(f));
+  if (overlap.length) {
+    throw new RunRefused(`these files have uncommitted edits in the user's folder and the run changed them too: ${overlap.join(", ")}. Commit or stash them and land again`);
+  }
+
+  const commits = Number(git(repo, "rev-list", "--count", `${base}..${runBranch}`).trim());
+  const who = identity(repo);
+  const passed = Object.entries(ledger.tasks).filter(([, t]) => t.status === "passed");
+
+  if (mode === "merge") {
+    if (git(repo, "rev-parse", "HEAD").trim() === base) git(repo, "merge", "--ff-only", runBranch);
+    else {
+      const r = gitRaw(repo, ...who, "merge", "--no-ff", "-m", `Merge orchestrate run ${topic}`, runBranch);
+      if (r.code !== 0) {
+        gitRaw(repo, "merge", "--abort");
+        throw new Conflict(`the run does not merge cleanly into ${ledger.userBranch}: ${(r.out + r.err).trim()}`);
+      }
+    }
+  } else {
+    const r = gitRaw(repo, "merge", "--squash", runBranch);
+    if (r.code !== 0) {
+      gitRaw(repo, "reset", "--merge"); // safe: no file the run changed had uncommitted edits
+      throw new Conflict(`the run does not apply cleanly to ${ledger.userBranch}: ${(r.out + r.err).trim()}`);
+    }
+    if (mode === "squash") {
+      if (gitRaw(repo, "diff", "--cached", "--quiet").code === 0) throw new RunRefused("the run changes nothing compared with the current branch; nothing to commit");
+      const lines = passed.map(([tid, t]) => `- ${t.title || tid}${t.worker ? ` (${t.worker})` : ""}`);
+      withMessage(dir, "land-msg.txt", `Orchestrate run ${topic}: ${passed.length} tasks\n\n${lines.join("\n")}\n`, (file) =>
+        git(repo, ...who, "commit", "-q", "--cleanup=verbatim", "-F", file));
+    }
+  }
+
+  gitRaw(repo, "worktree", "remove", "--force", ledger.runWorktree);
+  writeLedger(dir, { ...readLedger(dir), landed: { mode, at: new Date().toISOString() } });
+  return { mode, commits, files: changed, kept: runBranch };
+}
+
 // ---- CLI commands ----
 const flag = (args, name) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined; };
 const need = (args, name) => { const v = flag(args, name); if (v === undefined) throw new UsageError(`missing ${name}`); return v; };
@@ -206,3 +360,13 @@ export const task = (args) => {
 };
 export const worktree = (args) => print(ensureWorktree(need(args, "--run"), need(args, "--id")));
 export const status = (args) => print(runStatus(need(args, "--run")));
+export const commit = (args) => {
+  const tests = need(args, "--tests");
+  print(commitTask(need(args, "--run"), need(args, "--id"), {
+    tests: tests === "not-run" ? "not run" : tests, title: flag(args, "--title"), reworkOf: flag(args, "--rework-of"),
+  }));
+};
+export const land = (args) => {
+  if (args.includes("--squash") && args.includes("--uncommitted")) throw new UsageError("use only one of --squash and --uncommitted");
+  print(landRun(need(args, "--run"), { mode: args.includes("--squash") ? "squash" : args.includes("--uncommitted") ? "uncommitted" : "merge" }));
+};

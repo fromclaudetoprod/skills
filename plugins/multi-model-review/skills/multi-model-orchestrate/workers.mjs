@@ -5,7 +5,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
-  TOOLS, SESSION_TOOLS, MODEL_ID, SESSION_ID, UsageError, safePath, quote, runTool, binOf, recordOutcome,
+  TOOLS, SESSION_TOOLS, MODEL_ID, SESSION_ID, UsageError, safePath, quote, runTool, runGit, binOf, recordOutcome,
   jsonObjects, sumUsage, parseResult, classifyFailure, repoFingerprint,
 } from "../multi-model-review/core.mjs";
 
@@ -59,7 +59,7 @@ export function workerArgs(tool, { model, worktree, brief, out, session, resume,
 }
 
 const flag = (args, name) => { const i = args.indexOf(`--${name}`); return i >= 0 ? args[i + 1] : undefined; };
-const porcelain = (dir) => runTool("git", ["-C", quote(dir), "status", "--porcelain"]);
+const porcelain = (dir) => runGit(dir, ["status", "--porcelain"]);
 const same = (a, b) => (process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b);
 
 export function work(args) {
@@ -78,7 +78,7 @@ export function work(args) {
   if (!fs.existsSync(repo)) fail(`--repo does not exist: ${repo}`);
   // The worktree must be a linked worktree of the user's repo: same repo, but its own top folder.
   const probe = (dir, ...a) => {
-    const r = runTool("git", ["-C", quote(dir), "rev-parse", ...a]);
+    const r = runGit(dir, ["rev-parse", ...a]);
     if (r.code !== 0) fail(`not a git repo: ${dir}${r.err ? ` (${r.err.trim()})` : ""}`);
     return r.out.trim();
   };

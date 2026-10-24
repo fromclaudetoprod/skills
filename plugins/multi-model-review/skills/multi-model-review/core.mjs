@@ -47,6 +47,13 @@ export function runTool(cmd, args, { input, cwd, timeout = 60_000 } = {}) {
   return { code: r.status, out: r.stdout ?? "", err: r.stderr ?? "", spawnError: r.error ?? null };
 }
 
+// git without a shell: raw arguments are safe here (no quote()). Only for git, which is a real executable on every OS;
+// the other CLIs are .cmd shims and stay on runTool. Returns {code, out, err, spawnError}.
+export function runGit(dir, args, { input, timeout = 120_000 } = {}) {
+  const r = spawnSync("git", ["-C", dir, ...args], { encoding: "utf8", shell: false, input, timeout, maxBuffer: 64 * 1024 * 1024 });
+  return { code: r.status, out: r.stdout ?? "", err: r.stderr ?? "", spawnError: r.error ?? null };
+}
+
 function versionOf(tool) {
   const r = runTool(binOf(tool), ["--version"]);
   return r.code === 0 ? (r.out || r.err).trim().split(/\r?\n/)[0] : null;
@@ -304,14 +311,14 @@ export function classifyFailure(r, { resume } = {}) {
 // Compare the value before and after a run. Throws if the folder is not a git repo or git fails.
 export function repoFingerprint(repo) {
   const git = (...a) => {
-    const r = runTool("git", ["-C", quote(repo), ...a], { timeout: 120_000 });
+    const r = runGit(repo, a);
     if (r.code !== 0 || r.spawnError) throw new Error(`git ${a[0]} failed in ${repo}: ${(r.err || r.spawnError?.message || "").trim()}`);
     return r.out;
   };
   if (git("rev-parse", "--is-inside-work-tree").trim() !== "true") throw new Error(`not a git work tree: ${repo}`);
   const h = crypto.createHash("sha256");
   h.update(git("status", "--porcelain"));
-  const hasHead = runTool("git", ["-C", quote(repo), "rev-parse", "--verify", "-q", "HEAD"]).code === 0;
+  const hasHead = runGit(repo, ["rev-parse", "--verify", "-q", "HEAD"]).code === 0;
   h.update(hasHead ? git("diff", "HEAD", "--binary", "--no-ext-diff") : git("diff", "--cached", "--binary", "--no-ext-diff"));
   for (const f of git("ls-files", "--others", "--exclude-standard", "-z").split("\0").filter(Boolean)) {
     const abs = path.join(repo, f);
