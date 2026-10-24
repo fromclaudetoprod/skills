@@ -227,11 +227,22 @@ Starting points per tool. The builder verifies each against the installed versio
 
 | Tool | Write mode | Shell | Notes |
 |---|---|---|---|
-| Codex | `exec -s workspace-write -C <worktree>` | inside its sandbox | Spike 2026-10-24 (Windows, codex-cli 0.162.1): wrote the right files in 25 s, main untouched; its shell would not start in the sandbox, so it wrote through a `node_repl` MCP tool from the user's Codex config and could not run tests. Disable the user's MCP servers for workers and confirm Codex can still write (its built-in patch tool). |
+| Codex | `exec -s workspace-write -C <worktree>`; the user's MCP servers and plugins switched off by name from `CODEX_HOME/config.toml` (`-c mcp_servers.<name>.enabled=false`, `-c plugins."<p>".enabled=false`) | inside its sandbox | Unsafe on Windows (see Live results): the elevated sandbox cannot write, the unelevated one let `apply_patch` write outside the worktree. Menu warning `⚠ Windows sandbox: may not write, or may write outside its folder`. Unverified on macOS/Linux. |
 | Claude CLI | `-p` with only Read, Grep, Glob, Edit, Write; no MCP, skills or user settings | no | Used for Haiku/Sonnet workers. Same budget as the session. |
 | Copilot CLI | allow write, deny shell and url, `--add-dir <worktree>` only | no | Not installed on Todd's main machine; must be tested on his other computer (Copilot credits there). Built and tested in v1. |
 | Gemini CLI | an edit-allowing approval mode, no shell | no | API key: always labelled ⚠ API costs will apply. |
-| Cursor CLI | `--force` (only way to write in print mode) | macOS/Linux: `--sandbox enabled`; Windows: none | Windows rows carry ⚠ force, no sandbox. Claude Code's auto-mode safety check blocked a `--force` run in the spike; the skill must tell the user this may need their approval. |
+| Cursor CLI | `--force` (only way to write in print mode) | macOS/Linux: `--sandbox enabled`; Windows: none | Works on Windows (wrote in its worktree, session captured, no approval prompt in the live run) but is not confined there; rows carry ⚠ force, no sandbox. Claude Code's auto-mode safety check blocked a `--force` run in the earlier spike, so the skill still tells the user it may need approval. |
+
+**Live results (2026-10-24, Windows).** Claude CLI worker (Haiku): wrote in its worktree, a write to an absolute path
+outside it was refused, session captured: confined. Cursor (Grok 4.7 Medium, `--force`): wrote in its worktree, session
+captured, no approval prompt; not confined on Windows. Codex: `-c mcp_servers={}` does not stop the user's MCP servers;
+`-c mcp_servers.<name>.enabled=false` works only for servers defined as `[mcp_servers.<name>]` in `config.toml` (one from a
+plugin fails with "invalid transport"), and plugin-provided tools (e.g. a JS REPL) go off with
+`-c plugins."<p>".enabled=false`. In the elevated Windows sandbox Codex cannot write even inside the worktree; in the
+unelevated one its `apply_patch` wrote outside the worktree. Codex write mode is therefore unsafe on Windows. The whole
+lifecycle (start, worktree, work, commit, status, discard, land) worked with correct trailers. Running Python tests in
+a worktree created `__pycache__/`, which `commit` picked up; the skill now has Claude remove such artifacts first.
+Copilot and Gemini write modes are untested.
 
 **If a tool fails its write test** (Todd's decision): v1 ships with the tools that pass. A failing tool stays in the
 worker menu marked `experimental: may not write on this machine` until it is fixed; the review menu is unaffected.

@@ -127,16 +127,25 @@ below says so, the tool's own sandbox or permission flags enforce this (Codex `w
 allowlist and working-folder-only edit approval, Cursor's sandbox on macOS and Linux). Elsewhere it rests on the instruction. If anything in your own
 folder changes, Claude detects it and stops the run; that is detection, not prevention. Claude runs the tests itself.
 
-**Status:** only the Claude CLI worker has been run end to end so far. The Codex, Copilot, Gemini and Cursor write
-modes are built from each tool's documented flags and not yet tested live, so expect rough edges.
+**Status (tested live on Windows, 2026-10-24):**
+- **Claude CLI:** works and is confined. It wrote inside its worktree, and a write to an absolute path outside it was refused.
+- **Cursor (`--force`):** works, but it is not confined on Windows (it has no sandbox there), so the menu says `⚠ force, no sandbox`.
+- **Codex write mode:** unsafe on Windows, so it is shown as experimental with a warning. In the "elevated" Windows
+  sandbox Codex could not write even inside its worktree. In the "unelevated" sandbox its patch tool wrote a file
+  outside the worktree. Codex as a read-only reviewer is not affected.
+- **Copilot and Gemini write modes:** not tested. macOS and Linux: not tested.
+
+Codex has no single switch for "no MCP servers". Claude switches off your MCP servers and plugins one by one, by
+reading the names from your `config.toml` (in `CODEX_HOME`, default `~/.codex`). A server or plugin that is not listed there
+is not switched off.
 
 | Tool | How it writes | Shell for the worker |
 |---|---|---|
-| Codex | `workspace-write` sandbox, Claude passes a flag to switch your MCP servers off | inside its sandbox (may not start on Windows) |
+| Codex | `workspace-write` sandbox; your MCP servers and plugins switched off by name from your Codex config | inside its sandbox. Windows: unsafe, see Status |
 | Claude CLI | only Read, Grep, Glob, Edit and Write; no MCP, skills or user settings | none |
 | Copilot | write allowed, shell and url denied | none |
 | Gemini | `auto_edit` approval mode | none |
-| Cursor | `--force`; sandbox on macOS and Linux | macOS/Linux: sandboxed. Windows: none |
+| Cursor | `--force`; sandbox on macOS and Linux | macOS/Linux: sandboxed. Windows: none (works, but not confined) |
 
 Limits to know about:
 - **Claude CLI workers share your Claude limits.** They draw from the same budget as this session, so on a plan login
