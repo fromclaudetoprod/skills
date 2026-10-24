@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 import {
   detect, billingOf, accessFile, readJson, writeJson, MODELS_FILE, familyOf, TOOLS, TOOL_PREFERENCE, UsageError,
 } from "../multi-model-review/core.mjs";
+import { work } from "./workers.mjs";
 
 const TIER_ORDER = ["heavy", "standard", "light"];
 
@@ -59,15 +60,16 @@ const flag = (args, name) => { const i = args.indexOf(name); return i >= 0 ? arg
 const COMMANDS = {
   menu: (args) => console.log(JSON.stringify(workerMenu({ platform: flag(args, "--platform") ?? process.platform }), null, 2)),
   "record-write": (args) => { recordWrite(args[0], args[1], args[2]); console.log('{"ok":true}'); },
+  work,
 };
 
 function main() {
   const [command, ...args] = process.argv.slice(2);
   const fn = COMMANDS[command];
-  if (!fn) { console.error(`usage: node orchestrate.mjs ${["menu [--platform <p>]", "record-write <tool> <ok|failed> [note]"].join(" | ")}`); process.exit(2); }
+  if (!fn) { console.error(`usage: node orchestrate.mjs ${Object.keys(COMMANDS).join(" | ")}`); process.exit(2); }
   fn(args);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
-  try { main(); } catch (e) { if (e instanceof UsageError) { console.error(e.message); process.exit(2); } throw e; }
+  try { main(); } catch (e) { console.error(e instanceof Error ? e.message : String(e)); process.exit(2); }
 }

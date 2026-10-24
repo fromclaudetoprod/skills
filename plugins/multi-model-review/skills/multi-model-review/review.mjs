@@ -27,7 +27,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { TOOLS, SESSION_TOOLS, MODEL_ID, SESSION_ID, UsageError, safePath, quote, runTool, binOf, detect, menu, plan, record,
-  jsonObjects, sumUsage, parseResult, classifyFailure } from "./core.mjs";
+  jsonObjects, sumUsage, parseResult, classifyFailure, recordOutcome } from "./core.mjs";
 
 const fail = (message) => { throw new UsageError(message); };
 
@@ -100,10 +100,7 @@ function run() {
   // JSON output that could not be parsed is still the reply: keep it rather than lose the review.
   if (tool !== "codex") { const reply = text ?? r.out; if (reply) fs.writeFileSync(out, reply); }
   fs.writeFileSync(out.replace(/\.md$/i, "") + ".log", `exit ${r.code}\n--- stderr ---\n${r.err}\n${text === null && tool !== "codex" ? "" : `--- stdout ---\n${r.out}\n`}`);
-  if (status) record(tool, model, status, note);
-  // A cap that says to switch models (Cursor's per-model usage limits) blocks only this model; any other cap
-  // (for example a Codex account spend cap) blocks the whole tool until it is cleared.
-  if (status === "capped" && !/(different|another|other) model/i.test(r.err + r.out)) record(tool, "__tool", "capped", note);
+  recordOutcome(tool, model, { status, note }, r);
 
   const usageFile = path.join(path.dirname(out), "usage.jsonl");
   if (usage) fs.appendFileSync(usageFile, JSON.stringify({ at: new Date().toISOString(), tool, model, sessionId, reply: path.basename(out), ...usage }) + "\n");

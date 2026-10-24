@@ -218,6 +218,13 @@ export function record(tool, model, status, note) {
   writeJson(accessFile(), access);
 }
 
+// Record a finished run's availability. A cap that says to switch models (Cursor's per-model usage limits) blocks only
+// this model; any other cap (for example a Codex account spend cap) blocks the whole tool until it is cleared.
+export function recordOutcome(tool, model, { status, note }, r) {
+  if (!status) return;
+  record(tool, model, status, note);
+  if (status === "capped" && !/(different|another|other) model/i.test(r.err + r.out)) record(tool, "__tool", "capped", note);
+}
 
 // The tools print JSON (one object, an array of events, or JSON lines). Return every object found.
 export function jsonObjects(text) {
