@@ -115,6 +115,10 @@ Tests: passed
 
 A reworked task also carries `Rework-of: <commit>`. `git log --grep "Implemented-by: Grok"` finds what a model wrote.
 
+### Token budgets
+
+Every task gets a token budget (light 150k, standard 400k, heavy 1M, input plus output, including fix rounds). After each worker call Claude shows the running totals per tool, and when a task reaches its budget the worker is not run again until you decide: raise the budget, switch models, have Claude finish it, or skip it. Claude never raises a budget on its own.
+
 ### Send a task back
 Say **"Send Task 3 back to its agent: the date check is wrong."** Claude reads the trailers on that commit and
 resumes the same worker session, so the model still remembers the task. Copilot sessions can't be resumed, so rework
