@@ -40,9 +40,11 @@ out unless you pass `--all`. `untested` models are fine to offer: a model an acc
 nothing, and the helper remembers the answer.
 
 **Before asking which model, show the whole menu** as one compact table in your message, grouped by family
-(OpenAI, Anthropic, Google, xAI, Moonshot, Zhipu, Meta, Cursor, Other), columns `# · model · via · status`,
+(OpenAI, Anthropic, Google, xAI, Moonshot, Zhipu, Meta, Cursor, Other), columns `# · model · via · how it's paid · status`, with the row's `billing` label in "how it's paid",
 suggested rows marked ★. The question box holds only four options, so the table is how the user sees the rest. Show
-the same numbering for every round; do not re-number between rounds.
+the same numbering for every round; do not re-number between rounds. The same model can appear from more than one
+tool (Sonnet through the Claude CLI and through Copilot); the via and how-it's-paid columns tell them apart. Never
+drop either column.
 
 ## 3. Ask the user (AskUserQuestion), skipping anything they already said
 - First: **"Which kind of review?"**
@@ -53,7 +55,7 @@ the same numbering for every round; do not re-number between rounds.
   `2`, `1`, `4`. Rounds count reviewers only; your own draft is the starting point, not a round. Then, once the number
   is known, show the menu table and ask one question per round (up to four per AskUserQuestion call): **"Which model
   reviews round N?"** Options: the plan's pick marked `(Recommended)`, then the two next best rows, each described as
-  `#<n> · via <tool> · <family> · <available | untested> · <why>`. The automatic "Other" takes a menu number or a
+  `#<n> · via <tool> · <billing> · <family> · <available | untested> · <why>`. The automatic "Other" takes a menu number or a
   model id. Every round offers the same menu; the user may repeat a model or a family.
 - **Dialogue:** show the menu table, then ask both in one call:
   - **"Which model do you want to go back and forth with?"** Options: the best non-Anthropic rows from the plan, the
@@ -62,6 +64,9 @@ the same numbering for every round; do not re-number between rounds.
   - **"At most how many exchanges?"** Options `3 (Recommended)`, `2`, `5`, `8`. Describe: "An exchange is one reply
     from the other model. It stops sooner if you two agree or stop making progress; this is the ceiling, so it cannot
     run on forever."
+- For every chosen reviewer whose row has `needsConfirm: true`, ask before running it: "**<name> via <source> bills
+  <your API key | an account I can't identify>. Use it?**" with options `Yes, bill my API key` / `No, pick another
+  model`. A label alone is not enough.
 - Never suggest a model matching `notForReview`; the user may still type one.
 - Default plan: a different model family each round, and a Claude model last or not at all, since you wrote the work.
 

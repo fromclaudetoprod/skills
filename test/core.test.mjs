@@ -71,7 +71,7 @@ test("classifyFailure tolerates missing output fields and passes success through
 });
 
 test("safePath throws UsageError on a quote", () => {
-  assert.throws(() => safePath('C:\a"b', "x"), UsageError);
+  assert.throws(() => safePath('C:\\a"b', "x"), UsageError);
 });
 
 test("accessFile reads MMR_ACCESS_FILE at call time and record writes there", () => {

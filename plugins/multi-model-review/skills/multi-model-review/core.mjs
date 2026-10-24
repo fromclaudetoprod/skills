@@ -128,8 +128,39 @@ export function detect() {
   return { tools, accessFile: accessFile(), modelsFile: MODELS_FILE };
 }
 
+const SOURCE = { claude: "Claude CLI", codex: "Codex CLI", cursor: "Cursor CLI", gemini: "Gemini CLI", copilot: "GitHub Copilot CLI" };
+const PLAN_LABEL = {
+  claude: "uses your Claude limits (same budget as this session)",
+  codex: "uses your ChatGPT plan",
+  cursor: "uses your Cursor plan",
+  copilot: "uses Copilot credits",
+};
+const API_LABEL = "⚠ API costs will apply";
+const UNKNOWN_LABEL = "may be billed by API key; check";
+
+// Where a tool's cost lands. Reads only the env and codexHome it is given, so callers can inject both.
+export function billingOf(tool, { env = process.env, codexHome = CODEX_HOME } = {}) {
+  let paidBy;
+  if (tool === "claude") {
+    paidBy = env.ANTHROPIC_API_KEY || env.CLAUDE_CODE_USE_BEDROCK || env.CLAUDE_CODE_USE_VERTEX ? "api" : "plan";
+  } else if (tool === "codex") {
+    const auth = readJson(path.join(codexHome, "auth.json"), null);
+    if (!auth || typeof auth !== "object") paidBy = "unknown";
+    else if (auth.auth_mode === "chatgpt" || (auth.tokens && typeof auth.tokens === "object")) paidBy = "plan";
+    else if (auth.auth_mode === "apikey" || auth.OPENAI_API_KEY != null) paidBy = "api";
+    else paidBy = "unknown";
+  } else if (tool === "gemini") {
+    paidBy = "api";
+  } else {
+    paidBy = "plan";
+  }
+  const label = paidBy === "plan" ? PLAN_LABEL[tool] : paidBy === "api" ? API_LABEL : UNKNOWN_LABEL;
+  return { source: SOURCE[tool] ?? tool, paidBy, label,
+    sameBudgetAsSession: tool === "claude" && paidBy === "plan", needsConfirm: paidBy !== "plan" };
+}
+
 // One numbered row per model per tool. A row's "model" is the id to run; "variants" are the other effort levels.
-export function menu(all = false) {
+export function menu(all = false, { env, codexHome } = {}) {
   const { tools } = detect();
   const groups = new Map();
   for (const [tool, t] of Object.entries(tools)) {
@@ -144,8 +175,10 @@ export function menu(all = false) {
   }
   const effortRank = (v) => EFFORT_ORDER.indexOf(v.effort) * 2 + (v.thinking ? 0 : 1) + (v.fast ? 20 : 0);
   const rows = [...groups.values()].map((g) => {
+    const b = billingOf(g.tool, { env, codexHome });
     const pick = g.variants.find((v) => v.suggested) ?? [...g.variants].sort((a, b) => effortRank(a) - effortRank(b))[0];
-    return { tool: g.tool, family: g.family, model: pick.id, name: pick.name, base: g.base, status: pick.status,
+    return { tool: g.tool, source: b.source, paidBy: b.paidBy, billing: b.label, sameBudgetAsSession: b.sameBudgetAsSession,
+      needsConfirm: b.needsConfirm, family: g.family, model: pick.id, name: pick.name, base: g.base, status: pick.status,
       suggested: pick.suggested, rank: pick.rank, why: pick.why, variants: g.variants.map((v) => v.id).filter((id) => id !== pick.id) };
   });
   rows.sort((a, b) =>
