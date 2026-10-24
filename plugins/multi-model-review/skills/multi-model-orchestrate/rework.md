@@ -15,7 +15,7 @@ node --no-deprecation "<this folder>/orchestrate.mjs" work --tool <tool> --model
 - Exit 6 (session not found, expired or deleted): tell the user in one line and rerun with the same model and
   `--session new`, with a brief that carries the original task text, the earlier diff and the findings.
 - Each fix round updates `task --set fixRounds=<n>`. Setup-caused failures do not count.
-- In patch mode (`work` printed `mode: "patch"`), add one line to the fix brief: "The folder already contains your earlier change; diff against the current files." If the earlier diff did not apply (exit 9), send `patchError` verbatim instead.
+- In patch mode (`work` printed `mode: "patch"`), add one line to the fix brief: "The folder already contains your earlier change; send the complete new contents of every file you change, based on the current files." If the earlier diff did not apply (exit 9), send `patchError` verbatim instead, and tell the worker to re-send complete files.
 
 ## Conflict at commit
 When `commit` exits 7 with files listed: `discard --run "<run>" --id t1`, then `worktree --run "<run>" --id t1` (a

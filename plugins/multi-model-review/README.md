@@ -134,8 +134,8 @@ folder changes, Claude detects it and stops the run; that is detection, not prev
 - **Codex write mode:** unsafe on Windows, so Codex now uses **patch mode** there. In the "elevated" Windows
   sandbox Codex could not write even inside its worktree. In the "unelevated" sandbox its patch tool wrote a file
   outside the worktree. Codex as a read-only reviewer is not affected.
-- **Patch mode (Codex and Cursor on Windows):** the worker runs read-only and answers with a diff; Claude checks the
-  diff (no paths outside the folder, none inside `.git`) and applies it with git. Tested live on Windows
+- **Patch mode (Codex and Cursor on Windows):** the worker runs read-only and answers with whole files (models write unreliable diffs); `work` builds the
+  exact diff, keeps CRLF/LF, checks it (no paths outside the folder, none inside `.git`, none under a symlink, 1 MB cap) and applies it with git. Tested live on Windows
   (2026-10-24): Codex (gpt-6-luna) applied its diff in the worktree, a resumed session applied a follow-up diff, and the
   outside-write probe was not written; Cursor (grok-4.7-medium, `--mode ask`, no `--force`) applied its diff and
   declined the outside write; Claude Haiku write mode stayed confined; three per-task commits landed with correct
@@ -148,11 +148,11 @@ is not switched off.
 
 | Tool | How it writes | Shell for the worker |
 |---|---|---|
-| Codex | `workspace-write` sandbox; your MCP servers and plugins switched off by name from your Codex config. Windows: patch mode, read-only, returns a diff | inside its sandbox. Windows: none (read-only) |
+| Codex | `workspace-write` sandbox; your MCP servers and plugins switched off by name from your Codex config. Windows: patch mode, read-only, returns whole files | inside its sandbox. Windows: none (read-only) |
 | Claude CLI | only Read, Grep, Glob, Edit and Write; no MCP, skills or user settings | none |
 | Copilot | write allowed, shell and url denied | none |
 | Gemini | `auto_edit` approval mode (patch mode: `plan`) | none |
-| Cursor | `--force`; sandbox on macOS and Linux. Windows: patch mode, `--mode ask` without `--force`, returns a diff | macOS/Linux: sandboxed. Windows: none (read-only) |
+| Cursor | `--force`; sandbox on macOS and Linux. Windows: patch mode, `--mode ask` without `--force`, returns whole files | macOS/Linux: sandboxed. Windows: none (read-only) |
 
 Limits to know about:
 - **Claude CLI workers share your Claude limits.** They draw from the same budget as this session, so on a plan login

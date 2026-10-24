@@ -127,12 +127,12 @@ Worker naming is `<model display name or id> via <Tool name CLI>`, e.g. `Grok 4.
    `mode`, `usage` and running `totals` (also in `<run>/replies/usage.jsonl`). `--mode write|patch` defaults to `patch`
    for codex and cursor on Windows and `write` elsewhere (see `tools.md`); the output also lists `isolationSkipped`
    (Codex MCP servers or plugins that could not be switched off). In **patch mode** the worker cannot edit files: it
-   replies with one unified diff, `work` validates it and applies it in the worktree (`patchApplied`, `patchError`,
-   and the diff saved beside the reply as `<out>.patch`). Tell patch-mode workers the task is a diff in the reply.
+   replies with the complete new contents of each file it changes, `work` builds the exact diff, validates it and applies it in the worktree (`patchApplied`, `patchError`,
+   and the diff saved beside the reply as `<out>.patch`). Tell patch-mode workers the task is whole files in the reply.
 4. **Exit codes of `work`:** 0 ok · 3 model unavailable: tell the user, offer the next row · 4 capped:
    `task --set status=stalled --set note="<tool> out of usage"` and offer another model · 5 something changed in the
-   user's repo: **stop the run** and follow the exit-5 rule above (show `git status` and `diff`, ask, `rebaseline` only if the user says it was theirs) · 6 session not found (see `rework.md`) · 9 patch mode: the worker's diff was missing or did not apply, which
-   counts as a failed attempt: send the worker the `patchError` verbatim as a fix round, and say the folder already has
+   user's repo: **stop the run** and follow the exit-5 rule above (show `git status` and `diff`, ask, `rebaseline` only if the user says it was theirs) · 6 session not found (see `rework.md`) · 9 patch mode: the worker's files were missing or did not apply, which
+   counts as a failed attempt: send the worker the `patchError` verbatim as a fix round (it re-sends complete files), and say the folder already has
    its earlier change if an earlier diff applied (`rework.md`) ·
    2 anything else: read the `.log` beside `--out`; retry once only if it shows a transient error (network or
    timeout), otherwise ask the user (a blind retry can bill a metered tool twice).
