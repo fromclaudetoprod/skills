@@ -2,8 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { workerArgs, WORKER_ASK, WORKER_PATCH_ASK, parseNeeds, codexIsolationArgs, codexIsolation, configArg, defaultMode, extractPatch, validatePatch } from "../plugins/multi-model-review/skills/multi-model-orchestrate/workers.mjs";
+import { workerArgs, WORKER_ASK, WORKER_PATCH_ASK, parseNeeds, codexIsolationArgs, codexIsolation, configArg, defaultMode, extractPatch, validatePatch, symlinkAmong } from "../plugins/multi-model-review/skills/multi-model-orchestrate/workers.mjs";
 import { runTool } from "../plugins/multi-model-review/skills/multi-model-review/core.mjs";
+import { spawnSync } from "node:child_process";
 import { tmpDir, runCli, git, makeRepo } from "./helpers.mjs";
 
 const briefFile = path.join(tmpDir("brief"), "brief.md");
@@ -279,6 +280,13 @@ test("validatePatch rejects absolute paths, .., .git, symlinks and patches with 
   assert.ok(bad("diff --git a/x b/x\ncopy from ../x\ncopy to x\n"));
   assert.ok(bad("diff --git a/ln b/ln\nnew file mode 120000\n--- /dev/null\n+++ b/ln\n@@ -0,0 +1 @@\n+/etc\n"));
   assert.ok(bad("diff --git a/ln b/ln\nindex 1234567..89abcde 120000\n--- a/ln\n+++ b/ln\n@@ -1 +1 @@\n-a\n+b\n"));
+  assert.ok(bad("diff --git a/ln b/ln\nnew file mode 0120000\n--- /dev/null\n+++ b/ln\n@@ -0,0 +1 @@\n+/etc\n"));
+  assert.ok(bad("diff --git a/ln b/ln\nindex 1234567..89abcde 0120000\n--- a/ln\n+++ b/ln\n@@ -1 +1 @@\n-a\n+b\n"));
+  assert.ok(bad("diff --git a/sm b/sm\nnew file mode 160000\n--- /dev/null\n+++ b/sm\n@@ -0,0 +1 @@\n+Subproject commit 1\n"));
+  assert.ok(bad("diff --git a/x b/x\nold mode 100644\nnew mode 0o10\n"));
+  assert.ok(!bad("diff --git a/x b/x\nold mode 100644\nnew mode 100755\n"));
+  assert.ok(!bad("diff --git a/x b/x\nindex 1234567..89abcde 100644\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n"));
+  assert.ok(!bad("diff --git a/x b/x\nindex 1234567..89abcde\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n"));
   assert.ok(bad("--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n"));
   assert.ok(bad(""));
   assert.ok(/no `diff --git`/.test(validatePatch("hello").reason));
@@ -461,4 +469,27 @@ test("patch mode: a failed worker run skips the patch (not attempted)", () => {
   assert.equal(r.code, 2);
   assert.equal(r.json.patchApplied, false);
   assert.match(r.json.patchError, /^not attempted: the worker run failed/);
+});
+
+test("symlinkAmong finds a symlink among the changed paths (skips where symlinks cannot be made)", (t) => {
+  const { wt } = setupPatch();
+  fs.writeFileSync(path.join(wt, "real.txt"), "x");
+  assert.equal(symlinkAmong(wt, ["real.txt", "missing.txt"]), null);
+  try { fs.symlinkSync("real.txt", path.join(wt, "ln.txt")); } catch { t.skip("cannot create symlinks here"); return; }
+  assert.equal(symlinkAmong(wt, ["real.txt", "ln.txt"]), "ln.txt");
+});
+
+test("symlinkAmong sees a 120000 entry in the index", () => {
+  const { wt } = setupPatch();
+  const sha = spawnSync("git", ["-C", wt, "hash-object", "-w", "--stdin"], { input: "target", encoding: "utf8" }).stdout.trim();
+  git(wt, "update-index", "--add", "--cacheinfo", `120000,${sha},idx-link`);
+  assert.equal(symlinkAmong(wt, ["idx-link", "calc.py"]), "idx-link");
+});
+
+test("patch mode: a symlink patch is refused with exit 9 and nothing is created", () => {
+  const { wt, run } = setupPatch();
+  const r = run(fence("diff --git a/ln b/ln\nnew file mode 0120000\n--- /dev/null\n+++ b/ln\n@@ -0,0 +1 @@\n+/etc\n\\ No newline at end of file\n"));
+  assert.equal(r.code, 9);
+  assert.match(r.json.patchError, /not allowed/);
+  assert.ok(!fs.existsSync(path.join(wt, "ln")));
 });

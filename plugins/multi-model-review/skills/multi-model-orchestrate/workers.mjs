@@ -39,6 +39,8 @@ export function extractPatch(text) {
   return body.trim() ? body + "\n" : null;
 }
 
+const ALLOWED_MODES = [0o100644, 0o100755];
+
 // Pure check of a patch before git sees it. Paths come from `diff --git`, ---/+++ and rename/copy lines.
 export function validatePatch(patch) {
   const files = new Set();
@@ -64,8 +66,11 @@ export function validatePatch(patch) {
       if (m[1] !== "/dev/null") paths = [m[1]];
     } else if ((m = line.match(/^(?:rename|copy) (?:from|to) (.+)$/))) {
       paths = [`a/${m[1]}`];
-    } else if (/^(?:new file|old|new|deleted file) mode 120000/.test(line) || /^index [0-9a-f]+\.\.[0-9a-f]+ 120000/.test(line)) {
-      return { ok: false, reason: "symlinks are not allowed in a patch", files: [] };
+    } else if ((m = line.match(/^(?:new file|deleted file|old|new) mode (\S*)/) ?? line.match(/^index \S+ (\S+)\s*$/))) {
+      // Only regular files: 100644 and 100755. Symlinks (120000 in any spelling), gitlinks (160000) and odd modes are out.
+      if (!/^[0-7]+$/.test(m[1]) || !ALLOWED_MODES.includes(parseInt(m[1], 8))) {
+        return { ok: false, reason: `file mode ${m[1]} is not allowed (symlinks and submodules are refused)`, files: [] };
+      }
     }
     for (const raw of paths) {
       const why = badPath(raw) ?? badPath(strip(raw));
@@ -87,9 +92,32 @@ export function applyPatch(worktree, patch, patchFile) {
   const gitErr = (r) => (r.err || r.spawnError?.message || "").trim();
   const check = runGit(worktree, [...opts, "apply", "--check", ...tail]);
   if (check.code !== 0) return { applied: false, error: `git apply --check failed: ${gitErr(check)}` };
+  const summary = runGit(worktree, [...opts, "apply", "--summary", "--numstat", ...tail]);
+  if (SUMMARY_LINK.test(summary.out)) return { applied: false, error: "patch rejected: symlink not allowed (git's summary shows a link or submodule mode)" };
   const done = runGit(worktree, [...opts, "apply", ...tail]);
   if (done.code !== 0) return { applied: false, error: `git apply failed: ${gitErr(done)}` };
+  // Last line of defense: nothing the patch touched may be a symlink on disk or in the index.
+  const link = symlinkAmong(worktree, v.files);
+  if (link) {
+    runGit(worktree, [...opts, "apply", "-R", ...tail]);
+    return { applied: false, error: `symlink not allowed: ${link}` };
+  }
   return { applied: true, error: null };
+}
+
+const SUMMARY_LINK = /mode (?:change [0-7]+ => )?0*(?:120000|160000)\b/;
+
+// Returns the first of `files` (paths relative to the worktree) that is a symlink on disk or a 120000 entry in the index.
+export function symlinkAmong(worktree, files) {
+  for (const f of files) {
+    try { if (fs.lstatSync(path.join(worktree, f)).isSymbolicLink()) return f; } catch { /* missing or deleted */ }
+  }
+  const r = runGit(worktree, ["ls-files", "-s", "-z", "--", ...files]);
+  for (const e of r.out.split("\0")) {
+    const m = e.match(/^(\d+) \S+ \d+\t(.*)$/);
+    if (m && parseInt(m[1], 8) === 0o120000) return m[2];
+  }
+  return null;
 }
 
 export const parseNeeds = (text) => (text ?? "").split(/\r?\n/).flatMap((l) => {
