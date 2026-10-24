@@ -12,8 +12,15 @@ import {
 const fail = (message) => { throw new UsageError(message); };
 const TIMEOUT = 30 * 60_000;
 
+// briefPath null = the brief is sent inline below the ask (codex and claude read it from stdin).
+const briefLead = (p) => (p ? `Read the task brief at ${p}` : "Read the task brief below the line `--- TASK BRIEF ---`");
+export const BRIEF_MARKER = "--- TASK BRIEF ---";
+const inlineInput = (ask, brief) => `${ask}
+
+${BRIEF_MARKER}
+${fs.readFileSync(brief, "utf8")}`;
 export const WORKER_ASK = (briefPath) =>
-  `Read the task brief at ${briefPath} and do exactly what it asks. Edit files only inside the current folder. Do not commit, push or deploy. Do not run commands; if you need one (install a package, run a generator or formatter), do not run it — end your reply with a line \`NEEDS: <command> because <reason>\`. End your reply with a short summary of what you changed.`;
+  `${briefLead(briefPath)} and do exactly what it asks. Edit files only inside the current folder. Do not commit, push or deploy. Do not run commands; if you need one (install a package, run a generator or formatter), do not run it — end your reply with a line \`NEEDS: <command> because <reason>\`. End your reply with a short summary of what you changed.`;
 
 // Patch mode: the worker runs read-only and answers with its change as one unified diff, which we validate and
 // apply with git. Live 2026-10-24: Codex write mode is unsafe on Windows and Cursor can only write with --force.
@@ -21,7 +28,7 @@ export const PATCH_TOOLS = ["codex", "cursor", "gemini"];
 export const defaultMode = (tool, platform = process.platform) => (platform === "win32" && (tool === "codex" || tool === "cursor") ? "patch" : "write");
 
 export const WORKER_PATCH_ASK = (briefPath) =>
-  `Read the task brief at ${briefPath} and do what it asks, but you cannot edit files or run commands. Produce the complete change as ONE unified diff in git format (\`diff --git a/<path> b/<path>\`, paths relative to the current folder, \`--- /dev/null\` for new files) inside a single \`\`\`diff fenced block at the end of your reply. If the folder already contains your earlier change, diff against the current files. If you need a command run, add a line \`NEEDS: <command> because <reason>\` after the block.`;
+  `${briefLead(briefPath)} and do what it asks, but you cannot edit files or run commands. Produce the complete change as ONE unified diff in git format (\`diff --git a/<path> b/<path>\`, paths relative to the current folder, \`--- /dev/null\` for new files) inside a single \`\`\`diff fenced block at the end of your reply. If the folder already contains your earlier change, diff against the current files. If you need a command run, add a line \`NEEDS: <command> because <reason>\` after the block.`;
 
 // The LAST ```diff block of a reply, or null.
 export function extractPatch(text) {
@@ -124,7 +131,8 @@ export function readCodexConfig(codexHome = CODEX_HOME) {
 // worktree and brief are absolute and already safe. sid is the session id chosen up front (claude, gemini).
 export function workerArgs(tool, { model, worktree, brief, out, session, resume, chat, sid, isolation = [], mode = "write", platform = process.platform }) {
   const patch = mode === "patch";
-  const ask = patch ? WORKER_PATCH_ASK(brief) : WORKER_ASK(brief);
+  const mk = patch ? WORKER_PATCH_ASK : WORKER_ASK;
+  const ask = mk(brief), inlineAsk = mk(null);
   const briefDir = path.dirname(brief);
   const sessionFlags = resume ? ["--resume", resume] : sid ? ["--session-id", sid] : [];
   const cwd = worktree;
@@ -139,14 +147,14 @@ export function workerArgs(tool, { model, worktree, brief, out, session, resume,
     const args = resume
       ? ["exec", "resume", ...common, ...(patch ? readOnlyArgs("codex", { resume: true }) : ["-c", "sandbox_mode=workspace-write"]), ...iso, resume, "-"]
       : ["exec", ...common, ...(patch ? readOnlyArgs("codex") : ["-s", "workspace-write"]), "-C", quote(worktree), ...iso, "-"];
-    return { cmd: "codex", args, input: fs.readFileSync(brief, "utf8"), cwd };
+    return { cmd: "codex", args, input: inlineInput(inlineAsk, brief), cwd };
   }
   if (tool === "claude") {
     // No --add-dir, and Edit and Write are NOT in --allowedTools (an allow rule has no path scope). They stay in
     // --tools so the model has them, and --permission-mode acceptEdits auto-approves edits only inside the working
     // folder; a write outside it is refused. No shell, no web.
     // verify live: Claude worker still writes in cwd and is refused outside it
-    return { cmd: "claude", cwd, input: fs.readFileSync(brief, "utf8"), args: ["-p", "--model", model, ...sessionFlags,
+    return { cmd: "claude", cwd, input: inlineInput(inlineAsk, brief), args: ["-p", "--model", model, ...sessionFlags,
       "--output-format", "json", "--tools", "Read,Grep,Glob,Edit,Write", "--strict-mcp-config", "--disable-slash-commands",
       "--setting-sources", "project,local", "--permission-mode", "acceptEdits",
       "--allowedTools", "Read", "Grep", "Glob",

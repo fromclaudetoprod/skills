@@ -117,9 +117,19 @@ test("cwd is the worktree and codex and claude get the brief text on stdin", () 
   for (const tool of ["codex", "claude"]) {
     const w = workerArgs(tool, base);
     assert.equal(w.cwd, "/w/t1");
-    assert.equal(w.input, "do the thing");
+    assert.ok(w.input.endsWith("--- TASK BRIEF ---\ndo the thing"));
   }
   assert.equal(workerArgs("copilot", base).input, undefined);
+});
+
+test("codex and claude get the ask, then the brief, on stdin in both modes", () => {
+  for (const tool of ["codex", "claude"]) {
+    const wr = workerArgs(tool, base).input, pa = workerArgs(tool, { ...base, mode: "patch" }).input;
+    assert.ok(wr.startsWith(WORKER_ASK(null)) && wr.includes("Do not commit") && wr.includes("NEEDS:"));
+    assert.ok(pa.startsWith(WORKER_PATCH_ASK(null)) && pa.includes("```diff") && pa.includes("cannot edit files"));
+    for (const t of [wr, pa]) assert.ok(t.includes("\n\n--- TASK BRIEF ---\ndo the thing") && !t.includes(briefFile));
+  }
+  assert.ok(WORKER_ASK("/b.md").includes("/b.md"));
 });
 
 test("ask forbids commits and asks for NEEDS lines", () => {
@@ -284,8 +294,10 @@ const reply = fs.readFileSync(process.env.STUB_REPLY_FILE, "utf8");
 if (process.argv[1].includes("cursor")) {
   console.log(JSON.stringify({ type: "result", result: reply, usage: { inputTokens: 5, outputTokens: 2 } }));
 } else {
-  try { fs.readFileSync(0, "utf8"); } catch {}
-  fs.writeFileSync(a[a.indexOf("-o") + 1].replace(/^"|"$/g, ""), reply);
+  let input = "";
+  try { input = fs.readFileSync(0, "utf8"); } catch {}
+  const sawAsk = input.includes("cannot edit files") && input.includes("--- TASK BRIEF ---");
+  fs.writeFileSync(a[a.indexOf("-o") + 1].replace(/^"|"$/g, ""), sawAsk ? reply : "I tried to edit files but I am read-only.\n");
   console.log(JSON.stringify({ type: "turn.completed", usage: { input_tokens: 5, cached_input_tokens: 0, output_tokens: 2 } }));
 }
 `;
