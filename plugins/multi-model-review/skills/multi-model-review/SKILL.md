@@ -64,9 +64,13 @@ drop either column.
   - **"At most how many exchanges?"** Options `3 (Recommended)`, `2`, `5`, `8`. Describe: "An exchange is one reply
     from the other model. It stops sooner if you two agree or stop making progress; this is the ceiling, so it cannot
     run on forever."
-- For every chosen reviewer whose row has `needsConfirm: true`, ask before running it: "**<name> via <source> bills
-  <your API key | an account I can't identify>. Use it?**" with options `Yes, bill my API key` / `No, pick another
-  model`. A label alone is not enough.
+- **Billing confirmation (Panel rounds and Dialogue alike).** Once every reviewer is chosen, and before step 4 or any
+  run, check each chosen reviewer's menu row, including models the user typed via "Other" or by number, not only the
+  options you offered. For every row with `needsConfirm: true`, ask: "**<name> via <source> bills <your API key | an
+  account I can't identify>. Use it?**" with options: for `paidBy: "api"`, `Yes, bill my API key`; for
+  `paidBy: "unknown"`, `Yes, run it anyway (billing unclear)`; and in both cases `No, pick another model`. A "No"
+  re-asks that round (or that dialogue model) with a different pick, then confirms again. A label alone is not enough.
+  Stakes: the name Gemini does not mean Copilot's Gemini; `via Gemini CLI` bills an API key.
 - Never suggest a model matching `notForReview`; the user may still type one.
 - Default plan: a different model family each round, and a Claude model last or not at all, since you wrote the work.
 
