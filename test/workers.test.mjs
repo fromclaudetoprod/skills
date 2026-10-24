@@ -681,14 +681,100 @@ test("whole-file patch mode: no file blocks and no diff exits 9; duplicates and 
   assert.match(r.json.patchError, /never closed/);
 });
 
-test("whole-file patch mode: a ```diff reply still works (fallback), and file blocks win when both are present", () => {
+test("whole-file patch mode: a ```diff reply still works (fallback); a reply with both file blocks and a diff is rejected", () => {
   const { wt, run } = setupPatch();
   let r = run(fence(D("viadiff.txt")));
   assert.equal(r.code, 0, r.err + r.out);
   assert.equal(readBytes(wt, "viadiff.txt").replace(/\r\n/g, "\n"), "hi\n");
   r = run(fence(D("other.txt")) + FB("viafile.txt", "f\n"));
+  assert.equal(r.code, 9);
+  assert.match(r.json.patchError, /both file blocks and a diff/);
+  assert.ok(!fs.existsSync(path.join(wt, "viafile.txt")) && !fs.existsSync(path.join(wt, "other.txt")));
+  // a diff that is only the CONTENT of a file block does not count
+  r = run(wfReply(FB("patchdoc.md", "```diff\n" + D("x.txt") + "```\n", "````")));
   assert.equal(r.code, 0, r.err + r.out);
-  assert.ok(fs.existsSync(path.join(wt, "viafile.txt")) && !fs.existsSync(path.join(wt, "other.txt")));
+});
+
+test("extractFiles: a bare ``` inside a three-backtick block is rejected, so a later block cannot write another file", () => {
+  const evil = "```file path=a.md\nintro\n```\nmore text\n```file path=other.txt\nowned\n```\n```\n";
+  assert.throws(() => extractFiles(evil), /stray ``` line/);
+  assert.throws(() => extractFiles(FB("a.txt", "1\n") + "```\n"), /stray/);
+  // prose code fences outside blocks are fine
+  const ok = extractFiles("See:\n```sh\nnpm i\n```\n" + FB("a.txt", "1\n") + "Then:\n````text\nx\n````\n");
+  assert.deepEqual(ok.files, [{ path: "a.txt", content: "1\n" }]);
+});
+
+test("whole-file patch mode: a mismatched fence reply exits 9 and writes nothing", () => {
+  const { wt, run } = setupPatch();
+  const r = run("```file path=a.md\nintro\n```\nmore\n```file path=other.txt\nowned\n```\n```\n");
+  assert.equal(r.code, 9);
+  assert.match(r.json.patchError, /stray ``` line/);
+  assert.ok(!fs.existsSync(path.join(wt, "other.txt")) && !fs.existsSync(path.join(wt, "a.md")));
+});
+
+test("extractFiles: duplicates are compared normalized, deletes included", () => {
+  assert.throws(() => extractFiles(FB("a.txt", "1\n") + FB("./a.txt", "2\n")), /twice/);
+  assert.throws(() => extractFiles(FB("a.txt", "1\n") + FB("A.txt", "2\n")), /twice/);
+  assert.throws(() => extractFiles(FB("b.txt", "1\n") + "DELETE: B.txt\n"), /twice/);
+});
+
+test("extractFiles: DELETE needs the exact form and a valid path, otherwise the line is ignored", () => {
+  assert.equal(extractFiles("DELETE: ../x\nDELETE:y\n  DELETE: z\nDELETE:  \n"), null);
+  assert.deepEqual(extractFiles("DELETE: ok/a.txt\n").deletes, ["ok/a.txt"]);
+});
+
+test("parseNeeds ignores file-block bodies", () => {
+  const t = FB("a.txt", "NEEDS: rm -rf / because bad\n") + "NEEDS: npm i x because y\n";
+  assert.deepEqual(parseNeeds(t), ["npm i x because y"]);
+  assert.deepEqual(parseNeeds("```file path=a\nunclosed\nNEEDS: x because y\n"), ["x because y"]);
+});
+
+test("buildPatch: a mixed-EOL file keeps every untouched line's bytes", () => {
+  const wt = tmpDir("bpm");
+  git(wt, "init", "-q");
+  fs.writeFileSync(path.join(wt, "m.txt"), "one\r\ntwo\nthree\r\nfour\r\nfive\n");
+  const p = buildPatch(wt, [{ path: "m.txt", content: "one\ntwo\nthree\nfour\nFIVE\n" }]);
+  // lines one..four untouched (original bytes kept); FIVE is new (majority CRLF)
+  assert.ok(p.includes("+one\r\n+two\n+three\r\n+four\r\n+FIVE\r\n"), JSON.stringify(p));
+});
+
+test("checkPathSafe: a folder named ..cache is not 'outside'", () => {
+  const wt = tmpDir("cps3");
+  fs.mkdirSync(path.join(wt, "..cache"));
+  assert.equal(checkPathSafe(wt, "..cache/a.txt"), null);
+});
+
+test("--context: current files are appended to the brief for every tool and mode", () => {
+  for (const [tool, mode] of [["codex", "patch"], ["cursor", "patch"]]) {
+    const { root, wt, outDir, run } = setupPatch();
+    commitFile(wt, "src/a.txt", "line1\r\nwith ``` inside\r\n");
+    const r = run(wfReply(FB("n.txt", "x\n")), { tool, extra: ["--context", "src/a.txt", "--context", "calc.py"] });
+    assert.equal(r.code, 0, r.err + r.out);
+    const b = fs.readFileSync(path.join(outDir, "r1.brief.md"), "utf8");
+    assert.ok(b.startsWith("brief"));
+    assert.ok(b.includes("## Current src/a.txt\n\n````\nline1\nwith ``` inside\n````"), b);
+    assert.ok(b.includes("## Current calc.py\n\n````\ndef add(a, b):\n    return a + b\n````"), b);
+  }
+});
+
+test("--context: bad paths, missing files, big files and links are usage errors (exit 2)", () => {
+  const { wt, run } = setupPatch();
+  fs.writeFileSync(path.join(wt, "big.txt"), "x".repeat(200 * 1024 + 1));
+  fs.writeFileSync(path.join(wt, "bin.dat"), Buffer.from([0x61, 0, 0x62]));
+  fs.mkdirSync(path.join(wt, "d"));
+  for (const c of ["../x", "/etc/passwd", ".git/config", "missing.txt", "big.txt", "bin.dat", "d"]) {
+    const r = run("x", { extra: ["--context", c] });
+    assert.equal(r.code, 2, c);
+  }
+  fs.writeFileSync(path.join(wt, "ok200.txt"), "x".repeat(200 * 1024));
+  assert.equal(run(wfReply(FB("n.txt", "x\n")), { extra: ["--context", "ok200.txt"] }).code, 0);
+});
+
+test("--context also reaches write-mode stdin (codex)", () => {
+  const { wt, outDir, run } = setupPatch();
+  const r = run(wfReply(FB("n.txt", "x\n")), { extra: ["--context", "calc.py"] });
+  assert.equal(r.code, 0, r.err + r.out);
+  assert.ok(fs.existsSync(path.join(outDir, "r1.brief.md")));
 });
 
 test("whole-file patch mode: the stub answers with files only when the ask names the file format", () => {

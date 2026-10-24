@@ -123,7 +123,7 @@ Worker naming is `<model display name or id> via <Tool name CLI>`, e.g. `Grok 4.
      --worktree "<wt>" --brief "<run>/briefs/t1/brief.md" --out "<run>/replies/t1-r1.md" [--session new]
    ```
    Pass `--session new` for codex, claude, cursor and gemini, then store the printed `sessionId` with
-   `task --set session=<id>`; Copilot has no sessions. Output: `status`, `needs`, `changedFiles`, `outsideChanged`,
+   `task --set session=<id>`; Copilot has no sessions. In patch mode, pass `--context <path>` (repeatable) for every existing file the task changes (the plan's Files list): their current contents are appended to the brief, because workers on Windows may not be able to read files. Output: `status`, `needs`, `changedFiles`, `outsideChanged`,
    `mode`, `usage` and running `totals` (also in `<run>/replies/usage.jsonl`). `--mode write|patch` defaults to `patch`
    for codex and cursor on Windows and `write` elsewhere (see `tools.md`); the output also lists `isolationSkipped`
    (Codex MCP servers or plugins that could not be switched off). In **patch mode** the worker cannot edit files: it
