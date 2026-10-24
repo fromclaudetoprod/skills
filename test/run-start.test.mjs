@@ -204,6 +204,8 @@ test("toolConfigDirHit resolves links and short names of the deepest existing an
   assert.equal(toolConfigDirHit(path.join(codex, "a"), home, { CODEX_HOME: codex }), "CODEX_HOME");
   assert.equal(toolConfigDirHit(path.join(cfg, "runs"), home, {}), null);
   assert.equal(toolConfigDirHit(path.join(cfg, "runs"), home, { CLAUDE_CONFIG_DIR: "" }), null);
+  // config vars pointing at home itself or a filesystem root are not config folders
+  assert.equal(toolConfigDirHit(path.join(home, "orchestrate-runs", "x"), home, { CLAUDE_CONFIG_DIR: home, CODEX_HOME: path.parse(home).root }), null);
   // a link that leads into ~/.claude, with the run root not yet created below it
   fs.mkdirSync(path.join(home, ".claude"));
   const link = path.join(tmpDir("lnk"), "alias");

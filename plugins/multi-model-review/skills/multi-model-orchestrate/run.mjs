@@ -94,8 +94,10 @@ function realish(p) {
 export function toolConfigDirHit(rootDir, home = os.homedir(), env = process.env) {
   const root = realish(rootDir);
   const hit = (dir) => insideCI(realish(dir), root) || insideCI(path.resolve(dir), path.resolve(rootDir));
+  // An env var that points at home itself or a filesystem root is not a config folder: everything is inside it.
+  const broad = (dir) => { const r = realish(dir); return r === path.parse(r).root || insideCI(r, realish(home)) && insideCI(realish(home), r); };
   return TOOL_CONFIG_DIRS.find((d) => hit(path.resolve(home, d)))
-    ?? TOOL_CONFIG_ENV.find((v) => env[v] && hit(env[v])) ?? null;
+    ?? TOOL_CONFIG_ENV.find((v) => env[v] && !broad(env[v]) && hit(env[v])) ?? null;
 }
 
 export function startRun({ repo, topic, root = runRoot(), date = today(), allowSubmodules = false }) {

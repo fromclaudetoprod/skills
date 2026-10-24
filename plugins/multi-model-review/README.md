@@ -134,7 +134,7 @@ folder changes, Claude detects it and stops the run; that is detection, not prev
 - **Codex write mode:** unsafe on Windows, so Codex now uses **patch mode** there. In the "elevated" Windows
   sandbox Codex could not write even inside its worktree. In the "unelevated" sandbox its patch tool wrote a file
   outside the worktree. Codex as a read-only reviewer is not affected.
-- **Patch mode (Codex and Cursor on Windows):** the worker runs read-only and answers with whole files, each between `<<<FILE path=... code=CODE>>>` and `<<<END CODE>>>` lines with a random code per call (models write unreliable diffs, and Markdown fences are ambiguous); `work` builds the
+- **Patch mode (Codex and Cursor on Windows):** the worker runs read-only and answers with whole files, each between `<<<FILE path=... code=CODE>>>` and `<<<END CODE>>>` lines with a random code per call and a final `<<<DONE ...>>>` line with the counts (a reply without it is treated as cut off; a file with a `<<<FILE`, `<<<END`, `<<<DELETE` or `<<<DONE` line can't be written in patch mode) (models write unreliable diffs, and Markdown fences are ambiguous); `work` builds the
   exact diff, keeps CRLF/LF, checks it (no paths outside the folder, none inside `.git`, none under a symlink, 1 MB cap) and applies it with git. Tested live on Windows
   (2026-10-24): Codex (gpt-6-luna) applied its diff in the worktree, a resumed session applied a follow-up diff, and the
   outside-write probe was not written; Cursor (grok-4.7-medium, `--mode ask`, no `--force`) applied its diff and

@@ -347,7 +347,8 @@ function setupPatch() {
 }
 const FB = (p, content, code = "{{CODE}}") => `<<<FILE path=${p} code=${code}>>>\n${content}<<<END ${code}>>>\n`;
 const DEL = (p, code = "{{CODE}}") => `<<<DELETE path=${p} code=${code}>>>\n`;
-const wfReply = (...blocks) => "Here is the change.\n" + blocks.join("\n") + "NEEDS: npm i x because y\n";
+const doneLine = (text, code = "{{CODE}}") => `<<<DONE code=${code} files=${(text.match(/^<<<FILE /gm) ?? []).length} deletes=${(text.match(/^<<<DELETE /gm) ?? []).length}>>>\n`;
+const wfReply = (...blocks) => { const b = blocks.join("\n"); return "Here is the change.\n" + b + doneLine(b) + "NEEDS: npm i x because y\n"; };
 
 for (const tool of ["codex", "cursor"]) {
   test(`patch mode (${tool}): a valid new file is applied in the worktree`, () => {
@@ -480,7 +481,7 @@ const commitFile = (wt, rel, bytes) => {
 const readBytes = (wt, rel) => fs.readFileSync(path.join(wt, rel), "latin1");
 
 const K = "ABC123";
-const ex = (t) => extractFiles(t.replaceAll("{{CODE}}", K), K);
+const ex = (t, withDone = true) => extractFiles((t + (withDone ? (t && !t.endsWith("\n") ? "\n" : "") + doneLine(t) : "")).replaceAll("{{CODE}}", K), K);
 
 test("extractFiles: blocks, DELETE lines and exact content", () => {
   assert.equal(ex("nothing here"), null);
@@ -491,9 +492,9 @@ test("extractFiles: blocks, DELETE lines and exact content", () => {
 });
 
 test("extractFiles: any backtick or fence-looking content is kept verbatim", () => {
-  const body = "```\n````\n```file path=evil\nowned\n```\n  indented <<<END {{CODE}}>>> is not a delimiter\n```js\n";
+  const body = "```\n````\n```file path=evil\nowned\n```\n  <<  not a delimiter\n```js\n";
   const r = ex(FB("a.md", body) + FB("b.txt", "1\n"));
-  assert.deepEqual(r.files, [{ path: "a.md", content: body.replaceAll("{{CODE}}", K) }, { path: "b.txt", content: "1\n" }]);
+  assert.deepEqual(r.files, [{ path: "a.md", content: body }, { path: "b.txt", content: "1\n" }]);
 });
 
 test("extractFiles: only this call's code makes a delimiter; any other <<<FILE/END/DELETE line is an error, even inside a block", () => {
@@ -511,7 +512,50 @@ test("extractFiles: only this call's code makes a delimiter; any other <<<FILE/E
 });
 
 test("extractFiles: an unclosed block is an error", () => {
-  assert.throws(() => ex("<<<FILE path=a code={{CODE}}>>>\nno close\n"), /never closed/);
+  assert.throws(() => ex("<<<FILE path=a code={{CODE}}>>>\nno close\n", false), /never closed/);
+});
+
+test("extractFiles: mangled delimiters are errors, not prose (BOM, indent, backticks, fullwidth, case)", () => {
+  const bad = [
+    "﻿<<<DELETE path=a code={{CODE}}>>>", "  <<<DELETE path=a code={{CODE}}>>>", "`<<<DELETE path=a code={{CODE}}>>>`",
+    "＜＜＜DELETE path=a code={{CODE}}＞＞＞", "<<<delete path=a code={{CODE}}>>>", "<<<DELETE path=a code={{CODE}}>>> ",
+    "<<< DONE code={{CODE}} files=0 deletes=0>>>", "see code {{CODE}} here",
+  ];
+  for (const b of bad) {
+    assert.throws(() => ex(FB("ok.txt", "1\n") + b + "\n"), /looks like a block delimiter|delimiter-like/, JSON.stringify(b));
+    assert.throws(() => ex(FB("ok.txt", "x\n" + b + "\n")), /delimiter-like/, JSON.stringify(b));
+  }
+  // a BOM at the very start of the reply is dropped, not an error
+  assert.deepEqual(extractFiles(("﻿" + FB("a", "1\n") + doneLine(FB("a", "1\n"))).replaceAll("{{CODE}}", K), K).files, [{ path: "a", content: "1\n" }]);
+});
+
+test("extractFiles: a wrong-case END is an error, not content", () => {
+  assert.throws(() => ex("<<<FILE path=a code={{CODE}}>>>\nx\n<<<end {{CODE}}>>>\n<<<END {{CODE}}>>>\n", false), /delimiter-like/);
+});
+
+test("extractFiles: the DONE line is required, last, unique and must match the counts", () => {
+  const blocks = FB("a", "1\n") + DEL("b");
+  const all = (t) => t.replaceAll("{{CODE}}", K);
+  assert.throws(() => extractFiles(all(blocks), K), /no final <<<DONE/);
+  assert.throws(() => extractFiles(all(FB("a", "1\n") + "<<<DONE code={{CODE}} files=1 deletes=1>>>\n"), K), /says 1 files and 1 deletes/);
+  assert.throws(() => extractFiles(all(blocks + "<<<DONE code={{CODE}} files=1 deletes=0>>>\n"), K), /says 1 files and 0 deletes but the reply has 1 files and 1 deletes/);
+  assert.throws(() => extractFiles(all(blocks + doneLine(blocks) + doneLine(blocks)), K), /more than one/);
+  assert.throws(() => extractFiles(all(FB("a", "1\n") + doneLine(FB("a", "1\n")) + DEL("b")), K), /after the <<<DONE/);
+  assert.throws(() => extractFiles(all(FB("a", "1\n") + "<<<DONE code=WRONG1 files=1 deletes=0>>>\n"), K), /looks like a block delimiter/);
+  assert.equal(extractFiles(all("just prose\n" + doneLine("")), K), null);
+  assert.equal(extractFiles("just prose", K), null);
+  // DONE inside a block is an error
+  assert.throws(() => ex(FB("a", "x\n<<<DONE code={{CODE}} files=1 deletes=0>>>\n"), false), /delimiter-like/);
+});
+
+test("error texts never contain the code", () => {
+  const msgs = [];
+  for (const t of ["<<<FILE path=a code={{CODE}}>>>\nx\n<<<FILE path=b code={{CODE}}>>>\n", "<<<END {{CODE}}>>>\n", "<<<FILE path=a code={{CODE}}>>>\nx\n", "oops {{CODE}}\n",
+    "<<<FILE path=a code=WRONG1>>>\n", FB("a", "1\n"), FB("a", "1\n") + "<<<DONE code={{CODE}} files=3 deletes=0>>>\n"]) {
+    try { extractFiles(t.replaceAll("{{CODE}}", K), K); } catch (e) { msgs.push(e.message); }
+  }
+  assert.equal(msgs.length, 7);
+  for (const m of msgs) assert.ok(!m.includes(K), m);
 });
 
 test("extractFiles: a duplicate path is an error", () => {
@@ -528,9 +572,12 @@ test("buildPatch: existing CRLF file keeps CRLF, LF file stays LF, no-newline-at
   const p = buildPatch(wt, [{ path: "crlf.txt", content: "a\nB\n" }, { path: "lf.txt", content: "a\r\nB\n" }, { path: "nonl.txt", content: "a\nb\n" }]);
   assert.ok(p.includes("@@ -1,2 +1,2 @@\n-a\r\n-b\r\n+a\r\n+B\r\n"));
   assert.ok(p.includes("@@ -1,2 +1,2 @@\n-a\n-b\n+a\n+B\n"));
-  assert.ok(p.includes("-a\n-b\n\\ No newline at end of file\n+a\n+b\n"));
+  // an existing file keeps its final-newline state: adding or dropping the last newline alone is no change
+  assert.ok(!p.includes("nonl.txt"));
   fs.writeFileSync(path.join(wt, "nl.txt"), "a\nb\n");
-  assert.ok(buildPatch(wt, [{ path: "nl.txt", content: "a\nb" }]).endsWith("-a\n-b\n+a\n+b\n\\ No newline at end of file\n"));
+  assert.equal(buildPatch(wt, [{ path: "nl.txt", content: "a\nb" }]), "");
+  const q = buildPatch(wt, [{ path: "nonl.txt", content: "a\nc\n" }]);
+  assert.ok(q.endsWith("-a\n-b\n\\ No newline at end of file\n+a\n+c\n\\ No newline at end of file\n"), q);
 });
 
 test("buildPatch: unchanged files are skipped, new and deleted files get the right headers", () => {
@@ -623,7 +670,7 @@ for (const tool of ["codex", "cursor"]) {
 
 test("whole-file patch mode: a file that contains ``` lines applies exactly, even with fence-like and delimiter-like text", () => {
   const { wt, run } = setupPatch();
-  const doc = "# Title\n\n```sh\nnpm test\n```\n\n````\nnested\n````\n```file path=evil.txt\nowned\n```\nindented <<<END text\n";
+  const doc = "# Title\n\n```sh\nnpm test\n```\n\n````\nnested\n````\n```file path=evil.txt\nowned\n```\nindented << END text\n";
   commitFile(wt, "doc.md", "old\n");
   const r = run(wfReply(FB("doc.md", doc), FB("other.txt", "o\n")));
   assert.equal(r.code, 0, r.err + r.out);
@@ -678,12 +725,27 @@ test("whole-file patch mode: no blocks, duplicates, unclosed and identical files
   r = run(wfReply(FB("calc.py", "def add(a, b):\n    return a + b\n")));
   assert.equal(r.code, 9);
   assert.match(r.json.patchError, /nothing to change/);
+  r = run(FB("a.txt", "1\n"));
+  assert.equal(r.code, 9);
+  assert.match(r.json.patchError, /no final <<<DONE/);
+  assert.ok(!r.json.patchError.match(/[A-Z0-9]{6}>>>/));
   r = run("<<<FILE path=a.txt code={{CODE}}>>>\nnever closed\n");
   assert.equal(r.code, 9);
   assert.match(r.json.patchError, /never closed/);
   r = run("<<<END {{CODE}}>>>\n");
   assert.equal(r.code, 9);
   assert.match(r.json.patchError, /no block open/);
+});
+
+test("whole-file patch mode: a truncated reply (a delete lost with the DONE line) exits 9 and applies nothing", () => {
+  const { wt, run } = setupPatch();
+  commitFile(wt, "gone.txt", "bye\n");
+  const r = run("ok\n" + FB("new.txt", "n\n"));
+  assert.equal(r.code, 9);
+  assert.ok(fs.existsSync(path.join(wt, "gone.txt")) && !fs.existsSync(path.join(wt, "new.txt")));
+  const r2 = run("ok\n" + FB("new.txt", "n\n") + "  " + DEL("gone.txt") + "<<<DONE code={{CODE}} files=1 deletes=0>>>\n");
+  assert.equal(r2.code, 9);
+  assert.ok(fs.existsSync(path.join(wt, "gone.txt")));
 });
 
 test("whole-file patch mode: a ```file or ```diff reply is no longer accepted", () => {
@@ -713,14 +775,15 @@ test("extractFiles: duplicates are compared normalized, deletes included", () =>
 });
 
 test("extractFiles: only the exact DELETE block counts; prose that mentions DELETE is ignored", () => {
-  assert.equal(ex("DELETE: x\nplease <<delete>> y\n"), null);
+  assert.equal(ex("DELETE: x\nplease << delete >> y\n"), null);
   assert.deepEqual(ex(DEL("ok/a.txt")).deletes, ["ok/a.txt"]);
 });
 
 test("parseNeeds ignores block bodies and unparseable replies", () => {
   const t = FB("a.txt", "NEEDS: rm -rf / because bad\n") + "NEEDS: npm i x because y\n";
-  assert.deepEqual(parseNeeds(t.replaceAll("{{CODE}}", K), K), ["npm i x because y"]);
+  assert.deepEqual(parseNeeds((t + doneLine(t)).replaceAll("{{CODE}}", K), K), ["npm i x because y"]);
   assert.deepEqual(parseNeeds("<<<FILE path=a code=ABC123>>>\nunclosed\nNEEDS: x because y\n", K), []);
+  assert.deepEqual(parseNeeds("  <<<DELETE path=a code=ABC123>>>\nNEEDS: x because y\n" + doneLine("", K), K), []);
   assert.deepEqual(parseNeeds("write mode\nNEEDS: x because y\n"), ["x because y"]);
 });
 
@@ -749,10 +812,12 @@ test("whole-file patch mode: a mixed-EOL file exits 9 with the path in the error
 test("paths: 8.3 short names, trailing dots and spaces are refused everywhere", () => {
   const wt = tmpDir("bp8");
   git(wt, "init", "-q");
-  for (const p of ["GIT~1/config", "a/PROGRA~1/x", "x~12", "a./b", "dir/name ", "dir./f", "a/b. /c"]) {
-    assert.throws(() => buildPatch(wt, [{ path: p, content: "x\n" }]), /short name|dot or space|bad file path/, p);
-    assert.throws(() => buildPatch(wt, [], [p]), /short name|dot or space|bad file path/, p);
+  for (const p of ["GIT~1/config", "a/PROGRA~1/x", "x~12", "x~1.txt", "a./b", "dir/name ", "dir./f", "a/b. /c",
+    "con", "src/NUL.txt", "aux.js", "Com1", "lpt9.x", "a/b:stream", "f.txt:ads"]) {
+    assert.throws(() => buildPatch(wt, [{ path: p, content: "x\n" }]), /short name|dot or space|bad file path|reserved device|":"/, p);
+    assert.throws(() => buildPatch(wt, [], [p]), /short name|dot or space|bad file path|reserved device|":"/, p);
   }
+  for (const p of ["console.txt", "a~b.txt", "x~1a", "com10", "auxiliary/x"]) assert.doesNotThrow(() => buildPatch(wt, [{ path: p, content: "x\n" }]), p);
   assert.doesNotThrow(() => buildPatch(wt, [{ path: "a~b/..cache/x.txt", content: "x\n" }]));
 });
 

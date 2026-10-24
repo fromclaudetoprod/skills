@@ -32,38 +32,45 @@ const CODE_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 export const newCode = () => Array.from({ length: 6 }, () => CODE_CHARS[crypto.randomInt(CODE_CHARS.length)]).join("");
 
 export const WORKER_PATCH_ASK = (briefPath, code = newCode()) =>
-  `${briefLead(briefPath)} and do what it asks, but you cannot edit files or run commands. Return your change as COMPLETE FILES, never as a diff. For every file you create or change, write a line \`<<<FILE path=<relative/path> code=${code}>>>\` on its own (for example \`<<<FILE path=src/a.ts code=${code}>>>\`), then the file's exact, complete new contents, then a line \`<<<END ${code}>>>\` on its own. The path is relative to the current folder. Backticks and any other characters inside the contents need no escaping; just never write a line that starts with <<<FILE, <<<END or <<<DELETE inside a file. The file is replaced exactly as you give it, so never abbreviate it or write "rest unchanged". To delete a file, write a line \`<<<DELETE path=<relative/path> code=${code}>>>\` outside any block. Write all other prose outside the blocks. If the folder already contains your earlier change, base the file on its current contents. If you need a command run, add a line \`NEEDS: <command> because <reason>\` after the blocks.`;
+  `${briefLead(briefPath)} and do what it asks, but you cannot edit files or run commands. Return your change as COMPLETE FILES, never as a diff. Use only the code given in this message. For every file you create or change, write a line \`<<<FILE path=<relative/path> code=${code}>>>\` on its own (for example \`<<<FILE path=src/a.ts code=${code}>>>\`), then the file's exact, complete new contents, then a line \`<<<END ${code}>>>\` on its own. The path is relative to the current folder. Backticks and any other characters inside the contents need no escaping; just never write a line that starts with <<<FILE, <<<END or <<<DELETE inside a file. The file is replaced exactly as you give it, so never abbreviate it or write "rest unchanged". To delete a file, write a line \`<<<DELETE path=<relative/path> code=${code}>>>\` outside any block. Write all other prose outside the blocks. After the last block write a final line \`<<<DONE code=${code} files=<number of FILE blocks> deletes=<number of DELETE lines>>>>\`; a reply without it is rejected as cut off. Never write a line containing <<< followed by FILE, END, DELETE or DONE except these delimiters. If the folder already contains your earlier change, base the file on its current contents. If you need a command run, add a line \`NEEDS: <command> because <reason>\` after the blocks.`;
 
-// Whole-file replies. Only lines that exactly match this call's start, end or delete pattern are delimiters; content is
-// everything between a start line and its end line, verbatim (CRs stripped). Throws on: a line starting with <<<FILE,
-// <<<END or <<<DELETE that is not exactly a valid delimiter for THIS code (even inside a block, which is the safe
-// choice: a file that quotes another call's delimiters is rejected rather than guessed at), an unclosed block, a
-// start line inside a block, an END without a start, or a path given twice (normalized: leading ./ stripped,
-// case-folded). Returns { files, deletes, outside } where outside is the prose with every block cut out.
+// Whole-file replies. Only lines that exactly match this call's start, end, delete or done pattern are delimiters;
+// content is everything between a start line and its end line, verbatim (CRs stripped, a leading BOM dropped).
+// Throws on: any line, inside or outside a block, that looks like a delimiter after stripping BOM, whitespace and
+// backticks and NFKC-normalizing (<<< then FILE, END, DELETE or DONE, any case) but is not exactly a delimiter for THIS
+// call (this is the safe choice: a file that quotes delimiters, or a mangled delimiter, rejects the reply rather than
+// being guessed at; so a file with such a line cannot be written in patch mode); a non-delimiter line that contains the
+// code; an unclosed block; a start line inside a block; an END without a start; a path given twice (normalized:
+// leading ./ stripped, case-folded); a missing, repeated, early or miscounted <<<DONE code=C files=N deletes=M>>> line
+// (it must follow every block; it catches a reply cut off before its last blocks). Error texts never contain the code.
+// Returns { files, deletes, outside } where outside is the prose with every block cut out.
 const pathKey = (p) => p.replace(/^(\.\/)+/, "").toLowerCase();
-const DELIM = /^<<<(?:FILE|END|DELETE)/;
+const LOOKS_LIKE_DELIM = /<<<\s*(?:FILE|END|DELETE|DONE)/i;
 
 function scan(text, code) {
   const start = new RegExp(`^<<<FILE path=(.+?) code=${code}>>>$`);
   const del = new RegExp(`^<<<DELETE path=(.+?) code=${code}>>>$`);
+  const done = new RegExp(`^<<<DONE code=${code} files=(\\d+) deletes=(\\d+)>>>$`);
   const end = `<<<END ${code}>>>`;
-  const lines = String(text ?? "").split(/\r?\n/);
+  const lines = String(text ?? "").replace(/^\uFEFF/, "").split(/\r?\n/);
   const files = [], deletes = [], outside = [], seen = new Set();
+  let counts = null;
   const note = (p) => {
     const k = pathKey(p);
     if (seen.has(k)) throw new Error(`path given twice: ${p}`);
     seen.add(k);
   };
+  const suspicious = (line) => LOOKS_LIKE_DELIM.test(line.normalize("NFKC").replace(/[\uFEFF`]/g, "")) || line.includes(code);
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    if (!DELIM.test(line)) { outside.push(line); continue; }
     const s = line.match(start);
     if (s) {
+      if (counts) throw new Error(`a file block (line ${i + 1}) after the <<<DONE line`);
       const body = [];
       let closed = false;
       for (i++; i < lines.length; i++) {
         if (lines[i] === end) { closed = true; break; }
-        if (DELIM.test(lines[i])) throw new Error(`unexpected delimiter line inside the block for ${s[1]}: ${lines[i].slice(0, 60)}`);
+        if (suspicious(lines[i])) throw new Error(`unexpected delimiter-like line ${i + 1} inside the block for ${s[1]}`);
         body.push(lines[i]);
       }
       if (!closed) throw new Error(`the block for ${s[1]} is never closed`);
@@ -72,9 +79,25 @@ function scan(text, code) {
       continue;
     }
     const d = line.match(del);
-    if (d) { note(d[1]); deletes.push(d[1]); continue; }
+    if (d) {
+      if (counts) throw new Error(`a delete line (${i + 1}) after the <<<DONE line`);
+      note(d[1]); deletes.push(d[1]); continue;
+    }
+    const dn = line.match(done);
+    if (dn) {
+      if (counts) throw new Error("more than one <<<DONE line");
+      counts = [Number(dn[1]), Number(dn[2])];
+      continue;
+    }
     if (line === end) throw new Error("a <<<END line with no block open");
-    throw new Error(`delimiter line with a wrong or missing code (expected code=${code}): ${line.slice(0, 60)}`);
+    if (suspicious(line)) throw new Error(`line ${i + 1} looks like a block delimiter but is not an exact one for this reply (wrong or missing code, wrong case, indentation, backticks or other characters)`);
+    outside.push(line);
+  }
+  if (files.length || deletes.length || counts) {
+    if (!counts) throw new Error("the reply has no final <<<DONE line, so it may be cut off");
+    if (counts[0] !== files.length || counts[1] !== deletes.length) {
+      throw new Error(`the <<<DONE line says ${counts[0]} files and ${counts[1]} deletes but the reply has ${files.length} files and ${deletes.length} deletes`);
+    }
   }
   return { files, deletes, outside: outside.join("\n") };
 }
@@ -98,7 +121,9 @@ function pathProblem(raw) {
   const segs = p.split("/");
   if (p.endsWith("/") || segs.some((s) => s === "" || s === ".")) return bad;
   if (segs.some((s) => /[. ]$/.test(s))) return `${p}: a name ending in a dot or space is not allowed (Windows treats it as another name)`;
-  if (segs.some((s) => /~\d+$/.test(s))) return `${p}: a name ending in ~<digits> is not allowed (Windows 8.3 short names are aliases)`;
+  if (segs.some((s) => /~\d+(\.|$)/.test(s))) return `${p}: a name with ~<digits> at its end or before an extension is not allowed (Windows 8.3 short names are aliases)`;
+  if (segs.some((s) => s.includes(":"))) return `${p}: a name containing ":" is not allowed (Windows alternate data streams and drive letters)`;
+  if (segs.some((s) => /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(s.split(".")[0]))) return `${p}: a Windows reserved device name (con, prn, aux, nul, com1-9, lpt1-9) is not allowed`;
   return null;
 }
 // Normalized worktree-relative path, or null when it is not an acceptable file path.
@@ -176,7 +201,13 @@ export function buildPatch(worktree, files, deletes = []) {
     }
     if (Buffer.byteLength(w.content) > MAX_FILE) throw new Error(`${p}: larger than 1 MB`);
     if (old !== null && hasMixedEols(old)) throw new Error(`${p} has mixed line endings; edit it in write mode or normalize it first`);
-    const next = old !== null && old.includes("\n") ? withOldEols(old, w.content) : w.content.replace(/\r\n/g, "\n");
+    // An existing file keeps its final-newline state: models drop or add the last newline by accident.
+    let body = w.content;
+    if (old) {
+      if (!old.endsWith("\n") && body.endsWith("\n")) body = body.replace(/\r?\n$/, "");
+      else if (old.endsWith("\n") && body && !body.endsWith("\n")) body += "\n";
+    }
+    const next = old !== null && old.includes("\n") ? withOldEols(old, body) : body.replace(/\r\n/g, "\n");
     if (next === old) continue;
     if (old === null) {
       out.push(...header(p, "new file mode 100644"));
@@ -478,7 +509,7 @@ export function work(args) {
       let patch = null;
       try {
         const ex = extractFiles(reply, code);
-        if (!ex) error = `patch rejected: no <<<FILE or <<<DELETE block with code ${code} found in the reply`;
+        if (!ex) error = `patch rejected: no <<<FILE or <<<DELETE block found in the reply`;
         else {
           patch = buildPatch(worktree, ex.files, ex.deletes);
           if (!patch) error = "patch rejected: every file in the reply is identical to the current file, so there is nothing to change";
