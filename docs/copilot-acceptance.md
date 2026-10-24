@@ -16,7 +16,10 @@ claude plugin marketplace add fromclaudetoprod/skills
 claude plugin install multi-model-review@from-claude-to-prod
 ```
 
-or from a local checkout of the `orchestrate` branch (no install; the commands below use this path):
+or from a local checkout of the `orchestrate` branch (no install; the commands below use this path). The
+`orchestrate` branch is not pushed yet, so the clone below will not have it: copy the repo folder to the other machine,
+or make a bundle on this one (`git bundle create orchestrate.bundle orchestrate`), copy `orchestrate.bundle` over and
+run `git clone -b orchestrate orchestrate.bundle C:\skills-test`.
 
 ```powershell
 git clone https://github.com/fromclaudetoprod/skills.git C:\skills-test
@@ -151,5 +154,6 @@ node --no-deprecation $OR record-write copilot failed "<one line: what happened>
 
 ```powershell
 Remove-Item -Recurse -Force C:\copilot-test
+Remove-Item Env:MMO_RUN_ROOT
 Remove-Item -Force $PROBE -ErrorAction SilentlyContinue
 ```
