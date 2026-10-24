@@ -21,32 +21,32 @@ ${BRIEF_MARKER}
 ${fs.readFileSync(brief, "utf8")}`;
 export const WORKER_ASK = (briefPath) =>
   `${briefLead(briefPath)} and do exactly what it asks. Edit files only inside the current folder. Do not commit, push or deploy. Do not run commands; if you need one (install a package, run a generator or formatter), do not run it — end your reply with a line \`NEEDS: <command> because <reason>\`. End your reply with a short summary of what you changed.`;
-
-// Patch mode: the worker runs read-only and answers with its change as one unified diff, which we validate and
-// apply with git. Live 2026-10-24: Codex write mode is unsafe on Windows and Cursor can only write with --force.
+// Patch mode: the worker runs read-only and answers with the complete new contents of each changed file, which we
+// turn into an exact git patch and apply through the safety pipeline. Live 2026-10-24: Codex write mode is unsafe on
+// Windows and Cursor can only write with --force.
 export const PATCH_TOOLS = ["codex", "cursor", "gemini"];
 export const defaultMode = (tool, platform = process.platform) => (platform === "win32" && (tool === "codex" || tool === "cursor") ? "patch" : "write");
 
-export const WORKER_PATCH_ASK = (briefPath) =>
-  `${briefLead(briefPath)} and do what it asks, but you cannot edit files or run commands. Return your change as COMPLETE FILES, never as a diff: for every file you create or change, write its entire new contents inside a fenced block whose first line is \`\`\`file path=<path relative to the current folder> (for example \`\`\`file path=src/a.ts), with the closing fence alone at the start of a line. Put nothing else in a fenced block: write prose outside fences. If the file itself contains a \`\`\` line, you MUST open and close its block with four backticks (a bare \`\`\` line inside a three-backtick block ends it early and the whole reply is rejected). The file is replaced exactly as you give it, so never abbreviate it or write "rest unchanged". To delete a file, write a line \`DELETE: <path>\` outside any block. If the folder already contains your earlier change, base the file on its current contents. If you need a command run, add a line \`NEEDS: <command> because <reason>\` after the blocks.`;
+// A fresh random delimiter code per `work` call: 6 uppercase letters and digits. A file's own text cannot know it.
+const CODE_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+export const newCode = () => Array.from({ length: 6 }, () => CODE_CHARS[crypto.randomInt(CODE_CHARS.length)]).join("");
 
-// The LAST ```diff block of a reply, or null. The closing fence is at column 0: every content line of a diff starts
-// with ' ', '+', '-' or '\', so a fence at column 0 can only be the real close.
-export function extractPatch(text) {
-  const blocks = [...String(text ?? "").matchAll(/```diff[ \t]*\r?\n([\s\S]*?)\r?\n```[ \t]*(?=\r?\n|$)/g)];
-  if (!blocks.length) return null;
-  const body = blocks[blocks.length - 1][1].replace(/\r\n/g, "\n");
-  return body.trim() ? body + "\n" : null;
-}
+export const WORKER_PATCH_ASK = (briefPath, code = newCode()) =>
+  `${briefLead(briefPath)} and do what it asks, but you cannot edit files or run commands. Return your change as COMPLETE FILES, never as a diff. For every file you create or change, write a line \`<<<FILE path=<relative/path> code=${code}>>>\` on its own (for example \`<<<FILE path=src/a.ts code=${code}>>>\`), then the file's exact, complete new contents, then a line \`<<<END ${code}>>>\` on its own. The path is relative to the current folder. Backticks and any other characters inside the contents need no escaping; just never write a line that starts with <<<FILE, <<<END or <<<DELETE inside a file. The file is replaced exactly as you give it, so never abbreviate it or write "rest unchanged". To delete a file, write a line \`<<<DELETE path=<relative/path> code=${code}>>>\` outside any block. Write all other prose outside the blocks. If the folder already contains your earlier change, base the file on its current contents. If you need a command run, add a line \`NEEDS: <command> because <reason>\` after the blocks.`;
 
-// Whole-file replies: ```file path=<p> blocks (closing fence at column 0, at least as long as the opening one, so a
-// file that contains ``` can be wrapped in ````) plus `DELETE: <p>` lines outside blocks. Returns null when the reply
-// has neither. Throws on an unclosed block, a stray bare fence outside every block (a ``` line inside a file that was
-// opened with only 3 backticks ends the block early and leaves the real closing fence stranded), or a path given
-// twice (compared normalized: leading ./ stripped, case-folded). Content is the exact text between the fences.
+// Whole-file replies. Only lines that exactly match this call's start, end or delete pattern are delimiters; content is
+// everything between a start line and its end line, verbatim (CRs stripped). Throws on: a line starting with <<<FILE,
+// <<<END or <<<DELETE that is not exactly a valid delimiter for THIS code (even inside a block, which is the safe
+// choice: a file that quotes another call's delimiters is rejected rather than guessed at), an unclosed block, a
+// start line inside a block, an END without a start, or a path given twice (normalized: leading ./ stripped,
+// case-folded). Returns { files, deletes, outside } where outside is the prose with every block cut out.
 const pathKey = (p) => p.replace(/^(\.\/)+/, "").toLowerCase();
+const DELIM = /^<<<(?:FILE|END|DELETE)/;
 
-function scan(text) {
+function scan(text, code) {
+  const start = new RegExp(`^<<<FILE path=(.+?) code=${code}>>>$`);
+  const del = new RegExp(`^<<<DELETE path=(.+?) code=${code}>>>$`);
+  const end = `<<<END ${code}>>>`;
   const lines = String(text ?? "").split(/\r?\n/);
   const files = [], deletes = [], outside = [], seen = new Set();
   const note = (p) => {
@@ -54,119 +54,108 @@ function scan(text) {
     if (seen.has(k)) throw new Error(`path given twice: ${p}`);
     seen.add(k);
   };
-  let other = 0; // length of an open non-file fence (```sh, ```diff ...) in prose, 0 if none
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    const bare = line.match(/^(`{3,})[ \t]*$/);
-    if (other) {
-      outside.push(line);
-      if (bare && bare[1].length >= other) other = 0;
-      continue;
-    }
-    const open = line.match(/^(`{3,})file[ \t]+path=[ \t]*(.*?)[ \t]*$/);
-    if (open) {
-      const p = open[2].replace(/^(["'])(.*)\1$/, "$2");
+    if (!DELIM.test(line)) { outside.push(line); continue; }
+    const s = line.match(start);
+    if (s) {
       const body = [];
       let closed = false;
       for (i++; i < lines.length; i++) {
-        const c = lines[i].match(/^(`{3,})[ \t]*$/);
-        if (c && c[1].length >= open[1].length) { closed = true; break; }
+        if (lines[i] === end) { closed = true; break; }
+        if (DELIM.test(lines[i])) throw new Error(`unexpected delimiter line inside the block for ${s[1]}: ${lines[i].slice(0, 60)}`);
         body.push(lines[i]);
       }
-      if (!closed) throw new Error(`the file block for ${p} is never closed`);
-      note(p);
-      files.push({ path: p, content: body.length ? body.join("\n") + "\n" : "" });
+      if (!closed) throw new Error(`the block for ${s[1]} is never closed`);
+      note(s[1]);
+      files.push({ path: s[1], content: body.length ? body.join("\n") + "\n" : "" });
       continue;
     }
-    if (bare) throw new Error("a stray ``` line outside any file block: a file that contains ``` must be wrapped in a four-backtick fence");
-    const o = line.match(/^(`{3,})\S/);
-    if (o) { other = o[1].length; outside.push(line); continue; }
-    outside.push(line);
-    const del = line.match(/^DELETE: (\S.*?)[ \t]*$/);
-    if (del && cleanPath(del[1])) { note(del[1]); deletes.push(del[1]); }
+    const d = line.match(del);
+    if (d) { note(d[1]); deletes.push(d[1]); continue; }
+    if (line === end) throw new Error("a <<<END line with no block open");
+    throw new Error(`delimiter line with a wrong or missing code (expected code=${code}): ${line.slice(0, 60)}`);
   }
   return { files, deletes, outside: outside.join("\n") };
 }
 
-export function extractFiles(text) {
-  const { files, deletes } = scan(text);
+// null when the reply has no blocks at all.
+export function extractFiles(text, code) {
+  const { files, deletes } = scan(text, code);
   return files.length || deletes.length ? { files, deletes } : null;
 }
 
-// The reply with every ```file block cut out (file contents must not count as prose, NEEDS lines or diffs).
-export function outsideFileBlocks(text) {
-  try { return scan(text).outside; } catch { return String(text ?? ""); }
-}
+// The reply with every block cut out (file contents must not count as prose or NEEDS lines).
+export function outsideFileBlocks(text, code) { return scan(text, code).outside; }
 
-// Normalized worktree-relative path, or null when it is not an acceptable file path.
-function cleanPath(raw) {
+// Why a worktree-relative path is not acceptable, or null. Pure text checks; checkPathSafe looks at the disk.
+function pathProblem(raw) {
   const p = String(raw).replace(/^(\.\/)+/, "");
-  if (!p || /[\x00-\x1f"]/.test(p) || p !== p.trim()) return null;
-  if (!validatePatch(`diff --git a/${p} b/${p}\n`).ok) return null;
-  if (p.endsWith("/") || p.split("/").some((s) => s === "" || s === ".")) return null;
-  return p;
+  const bad = `bad file path: ${JSON.stringify(raw)}`;
+  if (!p || /[\x00-\x1f"]/.test(p) || p !== p.trim()) return bad;
+  const v = validatePatch(`diff --git a/${p} b/${p}\n`);
+  if (!v.ok) return v.reason;
+  const segs = p.split("/");
+  if (p.endsWith("/") || segs.some((s) => s === "" || s === ".")) return bad;
+  if (segs.some((s) => /[. ]$/.test(s))) return `${p}: a name ending in a dot or space is not allowed (Windows treats it as another name)`;
+  if (segs.some((s) => /~\d+$/.test(s))) return `${p}: a name ending in ~<digits> is not allowed (Windows 8.3 short names are aliases)`;
+  return null;
 }
+// Normalized worktree-relative path, or null when it is not an acceptable file path.
+const cleanPath = (raw) => (pathProblem(raw) ? null : String(raw).replace(/^(\.\/)+/, ""));
 
 const MAX_FILE = 1024 * 1024;
 
 // Why a worktree-relative path must not be read or written, or null. Looks at the disk: a symlink (or junction)
 // anywhere along the path, or a parent that resolves outside the worktree. Missing parts are fine (new files).
 export function checkPathSafe(worktree, rel) {
-  const root = fs.realpathSync(worktree);
+  const root = fs.realpathSync.native(worktree);
   const segs = rel.split("/");
   let cur = worktree;
+  // The real path of what exists must be the worktree's real path plus the lexical segments: this catches 8.3 short
+  // names, mount aliases and any other spelling the file system resolves to a different name.
+  const aliased = (upTo) => {
+    const want = path.join(root, ...segs.slice(0, upTo));
+    let got;
+    try { got = fs.realpathSync.native(path.join(worktree, ...segs.slice(0, upTo))); } catch { return null; }
+    const norm = (x) => (process.platform === "win32" ? x.toLowerCase() : x);
+    return norm(got) === norm(want) ? null : `${segs.slice(0, upTo).join("/")} resolves to a different path (${got}); it is an alias`;
+  };
   for (let i = 0; i < segs.length; i++) {
     cur = path.join(cur, segs[i]);
     let st;
-    try { st = fs.lstatSync(cur); } catch { return null; }
+    try { st = fs.lstatSync(cur); } catch { return aliased(i); }
     const here = segs.slice(0, i + 1).join("/");
     if (st.isSymbolicLink()) return `${here} is a symlink`;
     if (i < segs.length - 1) {
       if (!st.isDirectory()) return `${here} is not a folder`;
-      const rp = path.relative(root, fs.realpathSync(cur));
+      const rp = path.relative(root, fs.realpathSync.native(cur));
       if (rp === ".." || rp.startsWith(".." + path.sep) || path.isAbsolute(rp)) return `${here} resolves outside the worktree`;
     } else if (st.isDirectory()) return `${here} is a folder`;
   }
-  return null;
+  return aliased(segs.length);
 }
 
 // Splits text into lines that keep their own terminator; the last piece may have none.
 const pieces = (t) => t.match(/[^\n]*\n|[^\n]+$/g) ?? [];
 
 // Synthesizes an exact git patch that turns the worktree's current files into the worker's whole files: one hunk per
-// file, every old line removed and every new line added. Existing files keep their line endings (CRLF if they contain
-// any CRLF); new files are written with LF (git normalizes them under core.autocrlf). Throws Error(reason) on any
-// refusal, before reading or writing anything it should not.
-// New file text in the old file's line endings. Lines the worker left alone (same text at the start or the end of the
-// file) keep their original terminator byte for byte; new or changed lines get the file's dominant ending (CRLF only
-// if it has more CRLF than bare LF). A file with one ending throughout comes out with that ending.
+// file, every old line removed and every new line added. Existing files keep their line endings (all CRLF or all LF; a
+// file with both is refused); new files are written with LF (git normalizes them under core.autocrlf). Throws
+// Error(reason) on any refusal, before reading or writing anything it should not.
 function withOldEols(old, content) {
-  const oldP = pieces(old).map((x) => ({ t: x.replace(/\r?\n$/, ""), raw: x, nl: x.endsWith("\n") }));
-  const crlf = (old.match(/\r\n/g) ?? []).length, lf = (old.match(/\n/g) ?? []).length - crlf;
-  const eol = crlf > lf ? "\r\n" : "\n";
-  const newP = pieces(content.replace(/\r\n/g, "\n")).map((x) => ({ t: x.replace(/\n$/, ""), nl: x.endsWith("\n") }));
-  const same = (a, b) => a.t === b.t && a.nl === b.nl;
-  let k = 0;
-  while (k < oldP.length && k < newP.length && same(oldP[k], newP[k])) k++;
-  let e = 0;
-  while (e < oldP.length - k && e < newP.length - k && same(oldP[oldP.length - 1 - e], newP[newP.length - 1 - e])) e++;
-  return newP.map((n, i) => {
-    if (i < k) return oldP[i].raw;
-    if (i >= newP.length - e) return oldP[oldP.length - (newP.length - i)].raw;
-    return n.t + (n.nl ? eol : "");
-  }).join("");
+  const lf = content.replace(/\r\n/g, "\n");
+  return /\r\n/.test(old) ? lf.replace(/\n/g, "\r\n") : lf;
 }
+const hasMixedEols = (t) => { const crlf = (t.match(/\r\n/g) ?? []).length; return crlf > 0 && (t.match(/\n/g) ?? []).length > crlf; };
 
 export function buildPatch(worktree, files, deletes = []) {
   const out = [];
   const wanted = [...files.map((f) => ({ ...f, del: false })), ...deletes.map((p) => ({ path: p, del: true }))];
   for (const w of wanted) {
+    const why = pathProblem(w.path);
+    if (why) throw new Error(why);
     const p = w.path.replace(/^(\.\/)+/, "");
-    const badShape = new Error(`bad file path: ${JSON.stringify(w.path)}`);
-    if (!p || /[\x00-\x1f"]/.test(p) || p !== p.trim()) throw badShape;
-    const v = validatePatch(`diff --git a/${p} b/${p}\n`);
-    if (!v.ok) throw new Error(v.reason);
-    if (p.endsWith("/") || p.split("/").some((s) => s === "" || s === ".")) throw badShape;
     const unsafe = checkPathSafe(worktree, p);
     if (unsafe) throw new Error(`${p}: ${unsafe}`);
     const abs = path.join(worktree, p);
@@ -186,6 +175,7 @@ export function buildPatch(worktree, files, deletes = []) {
       continue;
     }
     if (Buffer.byteLength(w.content) > MAX_FILE) throw new Error(`${p}: larger than 1 MB`);
+    if (old !== null && hasMixedEols(old)) throw new Error(`${p} has mixed line endings; edit it in write mode or normalize it first`);
     const next = old !== null && old.includes("\n") ? withOldEols(old, w.content) : w.content.replace(/\r\n/g, "\n");
     if (next === old) continue;
     if (old === null) {
@@ -292,10 +282,15 @@ export function symlinkAmong(worktree, files) {
   return null;
 }
 
-export const parseNeeds = (text) => outsideFileBlocks(text).split(/\r?\n/).flatMap((l) => {
-  const m = l.match(/^\s*NEEDS:\s*(.+?)\s*$/);
-  return m ? [m[1]] : [];
-});
+// code given: only prose outside this call's blocks counts (a reply that does not parse yields no NEEDS).
+export const parseNeeds = (text, code) => {
+  let t = String(text ?? "");
+  if (code) { try { t = outsideFileBlocks(t, code); } catch { return []; } }
+  return t.split(/\r?\n/).flatMap((l) => {
+    const m = l.match(/^\s*NEEDS:\s*(.+?)\s*$/);
+    return m ? [m[1]] : [];
+  });
+};
 
 // Codex has no "all MCP off" switch (live test 2026-10-24: `-c mcp_servers={}` leaves the user's servers running).
 // Each server and plugin has to be disabled by name, from the user's own config.toml. Pure: takes the file text.
@@ -331,9 +326,9 @@ export function readCodexConfig(codexHome = CODEX_HOME) {
 }
 
 // worktree and brief are absolute and already safe. sid is the session id chosen up front (claude, gemini).
-export function workerArgs(tool, { model, worktree, brief, out, session, resume, chat, sid, isolation = [], mode = "write", platform = process.platform }) {
+export function workerArgs(tool, { model, worktree, brief, out, session, resume, chat, sid, isolation = [], mode = "write", platform = process.platform, code = newCode() }) {
   const patch = mode === "patch";
-  const mk = patch ? WORKER_PATCH_ASK : WORKER_ASK;
+  const mk = patch ? (b) => WORKER_PATCH_ASK(b, code) : WORKER_ASK;
   const ask = mk(brief), inlineAsk = mk(null);
   const briefDir = path.dirname(brief);
   const sessionFlags = resume ? ["--resume", resume] : sid ? ["--session-id", sid] : [];
@@ -433,6 +428,10 @@ export function work(args) {
   if (mode !== "write" && mode !== "patch") fail(`--mode must be write or patch, not ${mode}`);
   if (mode === "patch" && !PATCH_TOOLS.includes(tool)) fail(`--mode patch is not supported for ${tool}; use one of ${PATCH_TOOLS.join(", ")}, or --mode write`);
   const resume = session && session !== "new" ? session : null;
+  // --context <path> (repeatable): the current contents of existing files, appended to the brief. Workers on Windows
+  // may not be able to read the folder at all. Validated here, with the other arguments, before any side effect.
+  const ctxParts = flags(args, "context").map((c) => contextSection(worktree, c));
+  const code = newCode();
   let repoBefore;
   try { repoBefore = repoFingerprint(repo); } catch (e) { fail(e.message); }
   fs.mkdirSync(path.dirname(out), { recursive: true });
@@ -450,16 +449,12 @@ export function work(args) {
   }
 
   const iso = tool === "codex" ? codexIsolation(readCodexConfig()) : { args: [], skipped: [] };
-  // --context <path> (repeatable): the current contents of existing files, appended to the brief. Workers on Windows
-  // may not be able to read the folder at all.
-  const ctx = flags(args, "context");
   let briefFile = brief;
-  if (ctx.length) {
-    const parts = ctx.map((c) => contextSection(worktree, c));
+  if (ctxParts.length) {
     briefFile = out.replace(/\.md$/i, "") + ".brief.md";
-    fs.writeFileSync(briefFile, `${fs.readFileSync(brief, "utf8")}\n\n${parts.join("\n\n")}\n`);
+    fs.writeFileSync(briefFile, `${fs.readFileSync(brief, "utf8")}\n\n${ctxParts.join("\n\n")}\n`);
   }
-  const w = workerArgs(tool, { model, worktree, brief: briefFile, out, session, resume, chat, sid, isolation: iso.args, mode });
+  const w = workerArgs(tool, { model, worktree, brief: briefFile, out, session, resume, chat, sid, isolation: iso.args, mode, code });
   const r = runTool(w.cmd, w.args, { input: w.input, cwd: w.cwd, timeout: TIMEOUT });
   const { text, sessionId, usage } = parseResult(tool, r, { session, resume, sid, chat });
   const outcome = classifyFailure(r, { resume });
@@ -480,16 +475,16 @@ export function work(args) {
     if (outsideChanged) error = "not attempted: something changed outside the worktree";
     else if (outcome.exitCode !== 0) error = `not attempted: the worker run failed (exit ${outcome.exitCode})`;
     else {
-      let patch = null, exact = false;
+      let patch = null;
       try {
-        const ex = extractFiles(reply);
-        if (ex && extractPatch(outsideFileBlocks(reply)) !== null) throw new Error("reply has both file blocks and a diff; send whole files only");
-        patch = ex ? buildPatch(worktree, ex.files, ex.deletes) : extractPatch(reply);
-        exact = Boolean(ex);
-        if (ex && !patch) error = "patch rejected: every file in the reply is identical to the current file, so there is nothing to change";
-        else if (patch === null) error = "no ```file block (or ```diff block) found in the reply";
+        const ex = extractFiles(reply, code);
+        if (!ex) error = `patch rejected: no <<<FILE or <<<DELETE block with code ${code} found in the reply`;
+        else {
+          patch = buildPatch(worktree, ex.files, ex.deletes);
+          if (!patch) error = "patch rejected: every file in the reply is identical to the current file, so there is nothing to change";
+        }
       } catch (e) { error = "patch rejected: " + e.message; }
-      if (error === null) error = applyPatch(worktree, patch, patchFile, { exact }).error;
+      if (error === null) error = applyPatch(worktree, patch, patchFile, { exact: true }).error;
     }
     patchOut = { patchApplied: error === null, patchError: error };
     if (error) fs.appendFileSync(out.replace(/\.md$/i, "") + ".log", `patch error: ${error}\n`);
@@ -497,6 +492,6 @@ export function work(args) {
   const changedFiles = porcelain(worktree).out.split(/\r?\n/).filter(Boolean)
     .map((l) => l.slice(3).replace(/^.* -> /, "").replace(/^"(.*)"$/, "$1"));
   console.log(JSON.stringify({ tool, model, exitCode: r.code, status: outcome.status, out, sessionId: session ? sessionId : undefined,
-    usage, totals, needs: parseNeeds(reply), changedFiles, outsideChanged, mode, ...patchOut, isolationSkipped: iso.skipped }, null, 2));
+    usage, totals, needs: parseNeeds(reply, mode === "patch" ? code : undefined), changedFiles, outsideChanged, mode, ...patchOut, isolationSkipped: iso.skipped }, null, 2));
   process.exit(outsideChanged ? 5 : outcome.exitCode !== 0 ? outcome.exitCode : patchOut.patchError ? 9 : 0);
 }
