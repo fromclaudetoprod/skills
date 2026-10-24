@@ -6,7 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   TOOLS, SESSION_TOOLS, MODEL_ID, SESSION_ID, UsageError, safePath, quote, runTool, binOf, recordOutcome,
-  jsonObjects, sumUsage, parseResult, classifyFailure,
+  jsonObjects, sumUsage, parseResult, classifyFailure, repoFingerprint,
 } from "../multi-model-review/core.mjs";
 
 const fail = (message) => { throw new UsageError(message); };
@@ -74,12 +74,28 @@ export function work(args) {
   const repo = safePath(flag(args, "repo") ?? fail("--repo is required"), "repo");
   if (same(path.resolve(repo), path.resolve(worktree))) fail("--repo and --worktree must be different folders");
   if (!fs.existsSync(brief)) fail(`brief not found: ${brief}`);
-  if (!fs.existsSync(worktree) || runTool("git", ["-C", quote(worktree), "rev-parse", "--is-inside-work-tree"]).out.trim() !== "true") {
-    fail(`--worktree is not inside a git worktree: ${worktree}`);
+  if (!fs.existsSync(worktree)) fail(`--worktree does not exist: ${worktree}`);
+  if (!fs.existsSync(repo)) fail(`--repo does not exist: ${repo}`);
+  // The worktree must be a linked worktree of the user's repo: same repo, but its own top folder.
+  const probe = (dir, ...a) => {
+    const r = runTool("git", ["-C", quote(dir), "rev-parse", ...a]);
+    if (r.code !== 0) fail(`not a git repo: ${dir}${r.err ? ` (${r.err.trim()})` : ""}`);
+    return r.out.trim();
+  };
+  const real = (p) => fs.realpathSync(p);
+  if (probe(repo, "--is-inside-work-tree") !== "true") fail(`--repo is not a git work tree: ${repo}`);
+  if (probe(worktree, "--is-inside-work-tree") !== "true") fail(`--worktree is not inside a git worktree: ${worktree}`);
+  if (real(probe(worktree, "--path-format=absolute", "--git-common-dir")) !== real(probe(repo, "--path-format=absolute", "--git-common-dir"))) {
+    fail("--worktree belongs to a different git repo than --repo");
+  }
+  if (same(real(probe(worktree, "--show-toplevel")), real(probe(repo, "--show-toplevel")))) {
+    fail("--worktree must be a separate linked worktree, not the repo itself or a subfolder of it");
   }
   const resume = session && session !== "new" ? session : null;
-  const repoBefore = porcelain(repo).out;
+  let repoBefore;
+  try { repoBefore = repoFingerprint(repo); } catch (e) { fail(e.message); }
   fs.mkdirSync(path.dirname(out), { recursive: true });
+  fs.rmSync(out, { force: true }); // never read a stale reply from an earlier round
 
   let sid = null, chat = resume;
   if (tool === "claude") sid = resume ?? (session === "new" ? crypto.randomUUID() : null);
@@ -102,7 +118,7 @@ export function work(args) {
   if (usage) fs.appendFileSync(usageFile, JSON.stringify({ at: new Date().toISOString(), tool, model, sessionId, reply: path.basename(out), ...usage }) + "\n");
   const totals = sumUsage(fs.existsSync(usageFile) ? jsonObjects(fs.readFileSync(usageFile, "utf8")) : []);
 
-  const outsideChanged = porcelain(repo).out !== repoBefore;
+  const outsideChanged = repoFingerprint(repo) !== repoBefore;
   const reply = fs.existsSync(out) ? fs.readFileSync(out, "utf8") : "";
   const changedFiles = porcelain(worktree).out.split(/\r?\n/).filter(Boolean)
     .map((l) => l.slice(3).replace(/^.* -> /, "").replace(/^"(.*)"$/, "$1"));

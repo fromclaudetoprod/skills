@@ -2,6 +2,7 @@
 // No side effects on import: no CLI dispatch, no process exit. CLIs catch UsageError and exit 2 with its message.
 
 import { spawnSync } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -296,4 +297,26 @@ export function classifyFailure(r, { resume } = {}) {
     else { status = null; exitCode = 2; }
   }
   return { status, exitCode, note };
+}
+
+// A fingerprint of everything in a git repo's working tree that a stray write could change: the porcelain status, the
+// full diff against HEAD (so a further edit to an already-modified file shows), and a hash of every untracked file.
+// Compare the value before and after a run. Throws if the folder is not a git repo or git fails.
+export function repoFingerprint(repo) {
+  const git = (...a) => {
+    const r = runTool("git", ["-C", quote(repo), ...a], { timeout: 120_000 });
+    if (r.code !== 0 || r.spawnError) throw new Error(`git ${a[0]} failed in ${repo}: ${(r.err || r.spawnError?.message || "").trim()}`);
+    return r.out;
+  };
+  if (git("rev-parse", "--is-inside-work-tree").trim() !== "true") throw new Error(`not a git work tree: ${repo}`);
+  const h = crypto.createHash("sha256");
+  h.update(git("status", "--porcelain"));
+  const hasHead = runTool("git", ["-C", quote(repo), "rev-parse", "--verify", "-q", "HEAD"]).code === 0;
+  h.update(hasHead ? git("diff", "HEAD", "--binary", "--no-ext-diff") : git("diff", "--cached", "--binary", "--no-ext-diff"));
+  for (const f of git("ls-files", "--others", "--exclude-standard", "-z").split(" ").filter(Boolean)) {
+    const abs = path.join(repo, f);
+    h.update(f + " ");
+    try { h.update(fs.readFileSync(abs)); } catch { h.update("unreadable"); }
+  }
+  return h.digest("hex");
 }
