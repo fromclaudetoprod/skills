@@ -254,6 +254,12 @@ test("extractPatch returns the last diff block", () => {
   assert.equal(extractPatch("```diff\n```"), null);
 });
 
+test("extractPatch keeps fence-like lines inside the diff and applies the whole patch", () => {
+  const body = "diff --git a/doc.md b/doc.md\n--- a/doc.md\n+++ b/doc.md\n@@ -1,3 +1,3 @@\n ```sh\n-````\n+````\n ```\n";
+  assert.equal(extractPatch("x\n```diff\n" + body + "```\nNEEDS: a because b\n"), body);
+  assert.equal(extractPatch("```diff\r\n" + body.replace(/\n/g, "\r\n") + "```"), body);
+});
+
 test("validatePatch accepts a plain patch and lists its files", () => {
   assert.deepEqual(validatePatch(D("src/a.txt")), { ok: true, reason: null, files: ["src/a.txt"] });
   assert.deepEqual(validatePatch("diff --git a/x.py b/y.py\nsimilarity index 90%\nrename from x.py\nrename to y.py\n").files.sort(), ["x.py", "y.py"]);
@@ -272,6 +278,7 @@ test("validatePatch rejects absolute paths, .., .git, symlinks and patches with 
   assert.ok(bad("diff --git a/x b/x\nrename from x\nrename to ../x\n"));
   assert.ok(bad("diff --git a/x b/x\ncopy from ../x\ncopy to x\n"));
   assert.ok(bad("diff --git a/ln b/ln\nnew file mode 120000\n--- /dev/null\n+++ b/ln\n@@ -0,0 +1 @@\n+/etc\n"));
+  assert.ok(bad("diff --git a/ln b/ln\nindex 1234567..89abcde 120000\n--- a/ln\n+++ b/ln\n@@ -1 +1 @@\n-a\n+b\n"));
   assert.ok(bad("--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n"));
   assert.ok(bad(""));
   assert.ok(/no `diff --git`/.test(validatePatch("hello").reason));
@@ -321,7 +328,7 @@ function setupPatch() {
   const run = (reply, { tool = "codex", extra = [] } = {}) => {
     fs.writeFileSync(replyFile, reply);
     return runCli(CLI, ["work", ...extra, "--tool", tool, "--model", "m1", "--mode", "patch", "--brief", path.join(root, "b.md"),
-      "--worktree", wt, "--out", path.join(outDir, "r1.md"), "--repo", repo, ...extra], { env });
+      "--worktree", wt, "--out", path.join(outDir, "r1.md"), "--repo", repo], { env });
   };
   return { root, repo, wt, outDir, argvFile, run };
 }
@@ -410,4 +417,48 @@ test("--mode patch is refused for claude and copilot, and a bad mode is refused 
   assert.equal(run("x", { tool: "claude" }).code, 2);
   assert.equal(run("x", { tool: "copilot" }).code, 2);
   assert.equal(run("x", { extra: ["--mode", "bogus"] }).code, 2);
+});
+
+test("patch mode: fence-like lines inside the diff apply completely", () => {
+  const { wt, run } = setupPatch();
+  const doc = "```sh\nold\n```\n";
+  fs.writeFileSync(path.join(wt, "doc.md"), doc);
+  git(wt, "add", "doc.md"); git(wt, "-c", "user.name=t", "-c", "user.email=t@e", "commit", "-q", "-m", "doc");
+  const p = "diff --git a/doc.md b/doc.md\n--- a/doc.md\n+++ b/doc.md\n@@ -1,3 +1,4 @@\n ```sh\n-old\n+new\n+````\n ```\n";
+  const r = run(fence(p));
+  assert.equal(r.code, 0, r.err + r.out);
+  assert.equal(fs.readFileSync(path.join(wt, "doc.md"), "utf8").replace(/\r\n/g, "\n"), "```sh\nnew\n````\n```\n");
+});
+
+test("patch mode: exit 5 beats 9, and the patch is not attempted", () => {
+  const { repo, root, run } = setupPatch();
+  // the stub cannot touch the repo, so fake the stray write by making the reply path inside the repo impossible:
+  // instead run with a repo change made by a wrapper stub
+  const stray = path.join(repo, "stray.txt");
+  const bin = tmpDir("sbin");
+  const stub = `import fs from "node:fs"; fs.appendFileSync(${JSON.stringify(stray)}, "x"); fs.writeFileSync(process.argv[process.argv.indexOf("-o") + 1].replace(/^"|"$/g, ""), "no diff"); try { fs.readFileSync(0); } catch {}`;
+  fs.writeFileSync(path.join(bin, "s.mjs"), stub);
+  if (process.platform === "win32") fs.writeFileSync(path.join(bin, "codex.cmd"), '@node "%~dp0s.mjs" %*\r\n');
+  else { fs.writeFileSync(path.join(bin, "codex"), '#!/bin/sh\nexec node "$(dirname "$0")/s.mjs" "$@"\n'); fs.chmodSync(path.join(bin, "codex"), 0o755); }
+  const r = runCli(CLI, ["work", "--tool", "codex", "--model", "m1", "--mode", "patch", "--brief", path.join(root, "b.md"),
+    "--worktree", path.join(root, "wt"), "--out", path.join(root, "out", "r2.md"), "--repo", repo],
+  { env: { PATH: bin + path.delimiter + process.env.PATH, MMR_ACCESS_FILE: path.join(root, "access.json") } });
+  assert.equal(r.code, 5);
+  assert.equal(r.json.patchApplied, false);
+  assert.match(r.json.patchError, /^not attempted/);
+  assert.ok(run);
+});
+
+test("patch mode: a failed worker run skips the patch (not attempted)", () => {
+  const { root, repo, wt } = setupPatch();
+  const bin = tmpDir("fbin");
+  fs.writeFileSync(path.join(bin, "s.mjs"), 'console.error("boom"); process.exit(1);');
+  if (process.platform === "win32") fs.writeFileSync(path.join(bin, "codex.cmd"), '@node "%~dp0s.mjs" %*\r\n');
+  else { fs.writeFileSync(path.join(bin, "codex"), '#!/bin/sh\nexec node "$(dirname "$0")/s.mjs" "$@"\n'); fs.chmodSync(path.join(bin, "codex"), 0o755); }
+  const r = runCli(CLI, ["work", "--tool", "codex", "--model", "m1", "--mode", "patch", "--brief", path.join(root, "b.md"),
+    "--worktree", wt, "--out", path.join(root, "out", "r3.md"), "--repo", repo],
+  { env: { PATH: bin + path.delimiter + process.env.PATH, MMR_ACCESS_FILE: path.join(root, "access.json") } });
+  assert.equal(r.code, 2);
+  assert.equal(r.json.patchApplied, false);
+  assert.match(r.json.patchError, /^not attempted: the worker run failed/);
 });

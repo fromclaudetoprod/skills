@@ -135,8 +135,11 @@ folder changes, Claude detects it and stops the run; that is detection, not prev
   sandbox Codex could not write even inside its worktree. In the "unelevated" sandbox its patch tool wrote a file
   outside the worktree. Codex as a read-only reviewer is not affected.
 - **Patch mode (Codex and Cursor on Windows):** the worker runs read-only and answers with a diff; Claude checks the
-  diff (no paths outside the folder, none inside `.git`) and applies it with git. A live retest of patch mode is
-  pending.
+  diff (no paths outside the folder, none inside `.git`) and applies it with git. Tested live on Windows
+  (2026-10-24): Codex (gpt-6-luna) applied its diff in the worktree, a resumed session applied a follow-up diff, and the
+  outside-write probe was not written; Cursor (grok-4.7-medium, `--mode ask`, no `--force`) applied its diff and
+  declined the outside write; Claude Haiku write mode stayed confined; three per-task commits landed with correct
+  trailers. Still untested: Copilot and Gemini workers, and macOS/Linux.
 - **Copilot and Gemini write modes:** not tested. macOS and Linux: not tested.
 
 Codex has no single switch for "no MCP servers". Claude switches off your MCP servers and plugins one by one, by

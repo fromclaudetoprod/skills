@@ -246,7 +246,7 @@ plugin fails with "invalid transport"), and plugin-provided tools (e.g. a JS REP
 unelevated one its `apply_patch` wrote outside the worktree. Codex write mode is therefore unsafe on Windows. The whole
 lifecycle (start, worktree, work, commit, status, discard, land) worked with correct trailers. Running Python tests in
 a worktree created `__pycache__/`, which `commit` picked up; the skill now has Claude remove such artifacts first.
-Copilot and Gemini write modes are untested. Because of these results, Codex and Cursor on Windows now use patch mode (read-only plus a validated diff); its live retest is pending.
+Because of these results, Codex and Cursor on Windows now use patch mode (read-only plus a validated diff). **Patch-mode retest (Windows, 2026-10-24), all passed:** Codex gpt-6-luna (read-only, diff applied in the worktree, outside probe not written, a resumed session applied a follow-up diff as a fix round); Cursor grok-4.7-medium (`--mode ask`, no `--force`, diff applied, outside probe declined); Claude Haiku write mode confined; three per-task commits landed with correct trailers. The live tests also found that Codex and Claude workers never received the worker instructions (the brief alone went to stdin); fixed. Still untested: Copilot and Gemini workers, and macOS/Linux.
 
 **If a tool fails its write test** (Todd's decision): v1 ships with the tools that pass. A failing tool stays in the
 worker menu marked `experimental: may not write on this machine` until it is fixed; the review menu is unaffected.

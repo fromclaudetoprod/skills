@@ -30,9 +30,10 @@ export const defaultMode = (tool, platform = process.platform) => (platform === 
 export const WORKER_PATCH_ASK = (briefPath) =>
   `${briefLead(briefPath)} and do what it asks, but you cannot edit files or run commands. Produce the complete change as ONE unified diff in git format (\`diff --git a/<path> b/<path>\`, paths relative to the current folder, \`--- /dev/null\` for new files) inside a single \`\`\`diff fenced block at the end of your reply. If the folder already contains your earlier change, diff against the current files. If you need a command run, add a line \`NEEDS: <command> because <reason>\` after the block.`;
 
-// The LAST ```diff block of a reply, or null.
+// The LAST ```diff block of a reply, or null. The closing fence is at column 0: every content line of a diff starts
+// with ' ', '+', '-' or '\', so a fence at column 0 can only be the real close.
 export function extractPatch(text) {
-  const blocks = [...String(text ?? "").matchAll(/```diff[ \t]*\r?\n([\s\S]*?)\r?\n[ \t]*```/g)];
+  const blocks = [...String(text ?? "").matchAll(/```diff[ \t]*\r?\n([\s\S]*?)\r?\n```[ \t]*(?=\r?\n|$)/g)];
   if (!blocks.length) return null;
   const body = blocks[blocks.length - 1][1].replace(/\r\n/g, "\n");
   return body.trim() ? body + "\n" : null;
@@ -63,7 +64,7 @@ export function validatePatch(patch) {
       if (m[1] !== "/dev/null") paths = [m[1]];
     } else if ((m = line.match(/^(?:rename|copy) (?:from|to) (.+)$/))) {
       paths = [`a/${m[1]}`];
-    } else if (/^(?:new file|old|new|deleted file) mode 120000/.test(line)) {
+    } else if (/^(?:new file|old|new|deleted file) mode 120000/.test(line) || /^index [0-9a-f]+\.\.[0-9a-f]+ 120000/.test(line)) {
       return { ok: false, reason: "symlinks are not allowed in a patch", files: [] };
     }
     for (const raw of paths) {
@@ -81,11 +82,12 @@ export function applyPatch(worktree, patch, patchFile) {
   const v = validatePatch(patch);
   if (!v.ok) return { applied: false, error: `patch rejected: ${v.reason}` };
   fs.writeFileSync(patchFile, patch);
-  const opts = ["--whitespace=nowarn", patchFile];
+  const opts = ["-c", "core.protectNTFS=true", "-c", "core.protectHFS=true"];
+  const tail = ["--whitespace=nowarn", patchFile];
   const gitErr = (r) => (r.err || r.spawnError?.message || "").trim();
-  const check = runGit(worktree, ["apply", "--check", ...opts]);
+  const check = runGit(worktree, [...opts, "apply", "--check", ...tail]);
   if (check.code !== 0) return { applied: false, error: `git apply --check failed: ${gitErr(check)}` };
-  const done = runGit(worktree, ["apply", ...opts]);
+  const done = runGit(worktree, [...opts, "apply", ...tail]);
   if (done.code !== 0) return { applied: false, error: `git apply failed: ${gitErr(done)}` };
   return { applied: true, error: null };
 }
@@ -247,12 +249,14 @@ export function work(args) {
   let patchOut = {};
   if (mode === "patch") {
     let error = null;
-    if (outcome.exitCode === 0 && !outsideChanged) {
+    if (outsideChanged) error = "not attempted: something changed outside the worktree";
+    else if (outcome.exitCode !== 0) error = `not attempted: the worker run failed (exit ${outcome.exitCode})`;
+    else {
       const patch = extractPatch(reply);
       if (patch === null) error = "no ```diff block found in the reply";
       else error = applyPatch(worktree, patch, patchFile).error;
     }
-    patchOut = { patchApplied: outcome.exitCode === 0 && !outsideChanged && error === null, patchError: error };
+    patchOut = { patchApplied: error === null, patchError: error };
     if (error) fs.appendFileSync(out.replace(/\.md$/i, "") + ".log", `patch error: ${error}\n`);
   }
   const changedFiles = porcelain(worktree).out.split(/\r?\n/).filter(Boolean)

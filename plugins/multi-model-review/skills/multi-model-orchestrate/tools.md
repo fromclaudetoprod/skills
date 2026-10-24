@@ -12,6 +12,8 @@ write access to that folder only, and no push, deploy or commit. Flags are set b
 | Cursor | `--force`. Works on Windows but is not confined there: use patch mode | macOS/Linux: `--sandbox enabled`; Windows: none | yes | `uses your Cursor plan` |
 
 ## Patch mode
+Verified live on Windows (2026-10-24): Codex gpt-6-luna and Cursor grok-4.7-medium both returned a diff that was applied in the worktree, with the outside-write probe not written; a resumed Codex session applied a follow-up diff. Copilot and Gemini workers and macOS/Linux are still untested. The live tests also found a bug, now fixed: Codex and Claude workers never received the worker instructions, because only the brief went to stdin. `work` now sends the instructions, then the brief, on stdin.
+
 The worker runs read-only (Codex `-s read-only`, Cursor `--mode ask` without `--force`, Gemini `--approval-mode plan`)
 and ends its reply with one unified diff in a ```diff block. `work` takes the last such block, rejects it if any path
 is absolute, contains `..`, is inside `.git`, leaves the folder through a rename or copy, or is a symlink, then runs
