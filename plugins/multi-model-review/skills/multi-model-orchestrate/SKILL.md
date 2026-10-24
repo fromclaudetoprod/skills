@@ -16,7 +16,7 @@ The review helper is `../multi-model-review/review.mjs`. Read only the file you 
 - `tools.md`: before the first `work` call with a tool you have not used in this run.
 - `rework.md`: only when resuming, reworking an earlier task, or sending a fix back to a worker's session.
 
-Three rules for the whole run:
+Rules for the whole run:
 - **Hand off word for word.** A brief carries the plan's task text verbatim (quoted, not rewritten) and the spec or
   plan path. A fix request carries the reviewer's findings and the failing test output verbatim, not a summary. You
   add only the folder path, what done means and the safety rules.
@@ -55,14 +55,18 @@ from memory.
 - **Agent count 0 to 4.** 0 when the job is small (about one short task, or a few files of simple edits): say "This
   is small enough that I'll just do it." and offer to. 1 is the default minimum for a real run. More than 1 only for
   independent tasks in the same wave, never more than 4.
-- If most tasks are a chain, say plainly that the gain is budget, not speed.
+- If most tasks are a chain and the user has not said their Claude budget is short, recommend 0 agents and say why
+  (fewer handoffs, no lost context). Recommend agents when the budget is short or the tasks are independent and can
+  run in parallel. If the budget is unclear, ask one short question. When you do recommend agents for a chain, say
+  plainly that the gain is budget, not speed.
 - Per task, pick from rows whose `tiers` include the task's size. If the user said they are near their Claude limit,
-  prefer non-Anthropic rows and say that Claude CLI workers draw on the same Claude limits as this session.
+  prefer non-Anthropic rows. Whenever a row with `sameBudgetAsSession` is chosen as a worker, say that Claude CLI
+  workers share your Claude limits with this session.
 
 Show one table: `# · task · size · model · via · how it's paid · why` (why = one short phrase), with each row's
 `warnings` inline, then the setup and test commands and one paragraph of recommendation.
 
-## 4. Ask (AskUserQuestion), skipping anything the user already said
+## 4. Ask (AskUserQuestion), skipping anything the user already said (except the billing confirmation)
 1. **"Use this lineup?"** `Yes, run it (Recommended)` · `Change some models` · `Fewer agents` · `I'll just have you do
    it` (the last only when you recommended agents). "Change some models" asks one question per task to change, with
    the menu table shown first, the way `multi-model-review` asks per round.
@@ -78,7 +82,7 @@ Show one table: `# · task · size · model · via · how it's paid · why` (why
 3. **Billing confirmation**, for every chosen worker or reviewer row with `needsConfirm: true` (including ones the
    user typed via "Other"): "**<name> via <source> bills <your API key | an account I can't identify>. Use it?**"
    with `Yes, bill my API key` (or `Yes, run it anyway (billing unclear)` when `paidBy` is `unknown`) and
-   `No, pick another model`. A "No" re-asks with another pick. A label alone is not enough.
+   `No, pick another model`. A "No" re-asks with another pick. A label alone is not enough. The billing confirmation is never skipped, even if the user named the model.
 
 Also: offer rows with `writeStatus: "failed"` only with their warning ("experimental: may not write on this
 machine"). For Cursor on Windows, tell the user their Claude Code permission settings may ask them to approve the
@@ -116,18 +120,20 @@ Worker naming is `<model display name or id> via <Tool name CLI>`, e.g. `Grok 4.
 4. **Exit codes of `work`:** 0 ok · 3 model unavailable: tell the user, offer the next row · 4 capped:
    `task --set status=stalled --set note="<tool> out of usage"` and offer another model · 5 something changed in the
    user's repo: **stop the run** and tell the user, showing `git status` · 6 session not found (see `rework.md`) ·
-   2 anything else: retry once, then treat as a failed attempt.
+   2 anything else: read the `.log` beside `--out`; retry once only if it shows a transient error (network or
+   timeout), otherwise ask the user (a blind retry can bill a metered tool twice).
 5. **`needs`:** each entry is a command the worker asked for. Run it only if it is a setup, build, format or codegen
    command inside the worktree. Never run migrations, pushes, deploys, or network calls outside the package manager;
    ask the user about anything else. Then send the worker back (`rework.md`). A failure caused by missing setup is
    not a fix round.
 6. Run the tests yourself in the worktree and save the log to `<run>/tests/t1.log` (`start` creates only `briefs/`; make `tests/` and `diffs/` yourself).
-7. **Gate.** `git -C "<wt>" add -N .` then `git -C "<wt>" diff > "<run>/diffs/t1.patch"`.
+7. **Gate.** `git -C "<wt>" add -N .` (deliberate, so the diff shows new files) then `git -C "<wt>" diff > "<run>/diffs/t1.patch"`.
    - *This session signs off:* read the diff and the test log; decide against the plan.
    - *Others sign off:* write a review brief (diff pasted in, the task brief, the test log, ending in
      `VERDICT: AGREE` or `VERDICT: REVISE` with `## Required changes`, as in `multi-model-review` step 4) and run
      `review.mjs run --tool <t> --model <id> --brief … --out … --repo "<wt>"`. Read only the `verdict` and the test
-     result. Check reviewer claims before sending them on.
+     result. Check reviewer claims before sending them on. `review.mjs run` exits: 5 (`treeChanged`) stop the run like
+     `work`; 2, 3 or 4 pick another reviewer, or ask.
 8. **Fail:** send the worker the reviewer's or your findings and the failing test output verbatim (`rework.md`) and
    count one fix round: `task --set fixRounds=<n>`. At most **3 fix rounds**, then ask the user: a different model /
    Claude does it / skip (`task --set status=skipped`).
@@ -152,7 +158,9 @@ is `passed`, `stalled` or `skipped`.
 - Land on the user's branch: `land --run "<run>"` (merge, fast-forward when possible); `--squash` if the user asks;
   `--uncommitted` when commits are forbidden (say so in the report). `land` refuses (exit 7) if the user has ANY
   staged changes, is on a different branch than at start, or a file the run changed has uncommitted edits. Tell the
-  user exactly which, ask them to commit or unstage, and land again. It never overwrites.
+  user exactly which, ask them to commit or unstage, and land again. Never stage, unstage, stash or commit the
+  user's changes yourself, and never run `git restore` or `git checkout` in their folder. Tell them exactly what
+  to run and wait. `land` never overwrites.
 - The run branch is kept either way; the user deletes it when done.
 - Report one line per task: worker, verdict, fix rounds, tokens, tests. Then totals by source from `usage.jsonl`
   (Copilot reports none; Codex a total only; do not claim to know your own Claude spend), stalled or skipped tasks,
