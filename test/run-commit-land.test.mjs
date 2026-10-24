@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import {
-  startRun, ensureWorktree, setTask, readLedger, commitTask, landRun, RunRefused, OutsideChange, NothingToCommit, Conflict,
+  startRun, ensureWorktree, setTask, readLedger, commitTask, landRun, discardTask, RunRefused, OutsideChange, NothingToCommit, Conflict,
 } from "../plugins/multi-model-review/skills/multi-model-orchestrate/run.mjs";
 import { tmpDir, runCli, git, makeRepo } from "./helpers.mjs";
 
@@ -253,4 +253,84 @@ test("the ledger is written whole, with no temp files left behind", () => {
   const s = setup();
   assert.deepEqual(fs.readdirSync(s.run).filter((f) => f.endsWith(".tmp")), []);
   assert.equal(readLedger(s.run).tasks.t1.worker, TASK1.worker);
+});
+
+// The user commits a change to calc.py that conflicts with the run's subtract, and has an unrelated unstaged edit.
+function conflictSetup() {
+  const s = setup();
+  commitTask(s.run, "t1", { tests: "passed" });
+  fs.writeFileSync(path.join(s.repo, "other.txt"), "v1\n");
+  git(s.repo, "add", "other.txt");
+  git(s.repo, "commit", "-q", "-m", "Add other");
+  fs.writeFileSync(path.join(s.repo, "calc.py"), "def add(a, b):\n    return a + b\n\ndef subtract(a, b):\n    return b - a\n");
+  git(s.repo, "commit", "-q", "-a", "-m", "Conflicting subtract");
+  fs.appendFileSync(path.join(s.repo, "other.txt"), "my unstaged edit\n");
+  return s;
+}
+const noMerge = (repo) => assert.equal(fs.existsSync(path.join(repo, ".git", "MERGE_HEAD")), false);
+
+for (const mode of ["merge", "squash"]) {
+  test(`land ${mode} conflict keeps the user's unstaged edit and leaves no merge behind`, () => {
+    const s = conflictSetup();
+    const head = tip(s.repo, "HEAD");
+    assert.throws(() => landRun(s.run, { mode }), (e) => e instanceof Conflict && e.exitCode === 7);
+    assert.equal(fs.readFileSync(path.join(s.repo, "other.txt"), "utf8"), "v1\nmy unstaged edit\n");
+    noMerge(s.repo);
+    assert.equal(git(s.repo, "diff", "--cached", "--name-only").trim(), "");
+    assert.equal(tip(s.repo, "HEAD"), head);
+    assert.ok(git(s.repo, "branch", "--list", s.runBranch).trim());
+    assert.ok(fs.existsSync(s.runWorktree));
+  });
+}
+
+test("land refuses when the user has staged changes, and leaves them alone", () => {
+  const s = setup();
+  commitTask(s.run, "t1", { tests: "passed" });
+  fs.writeFileSync(path.join(s.repo, "staged.txt"), "mine\n");
+  git(s.repo, "add", "staged.txt");
+  for (const mode of ["merge", "squash", "uncommitted"]) {
+    assert.throws(() => landRun(s.run, { mode }), (e) => e instanceof RunRefused && e.exitCode === 7 && /staged/.test(e.reason), mode);
+  }
+  assert.equal(git(s.repo, "diff", "--cached", "--name-only").trim(), "staged.txt");
+  assert.equal(runCli(CLI, ["land", "--run", s.run]).code, 7);
+});
+
+test("a conflicted task can be discarded and redone from the new run tip", () => {
+  const dir = tmpDir("dc");
+  const repo = makeRepo(path.join(dir, "repo"));
+  const { run, runBranch } = startRun({ repo, topic: "demo", root: path.join(dir, "runs"), date: "20261024" });
+  const a = ensureWorktree(run, "a");
+  const b = ensureWorktree(run, "b");
+  fs.writeFileSync(path.join(a.path, "calc.py"), "def add(a, b):\n    return a + b + 1\n");
+  fs.writeFileSync(path.join(b.path, "calc.py"), "def add(a, b):\n    return a - b\n");
+  setTask(run, "a", { title: "Task A" });
+  setTask(run, "b", { title: "Task B" });
+  commitTask(run, "a", { tests: "passed" });
+  assert.throws(() => commitTask(run, "b", { tests: "passed" }), Conflict);
+  assert.equal(runCli(CLI, ["commit", "--run", run, "--id", "b", "--tests", "passed"]).code, 8);
+  assert.throws(() => discardTask(run, "a"), (e) => e instanceof RunRefused && e.exitCode === 7);
+  const d = runCli(CLI, ["discard", "--run", run, "--id", "b"]);
+  assert.equal(d.code, 0, d.err);
+  assert.ok(!fs.existsSync(b.path));
+  assert.equal(git(repo, "branch", "--list", "orchestrate/demo--b").trim(), "");
+  const t = readLedger(run).tasks.b;
+  assert.equal(t.status, "pending");
+  assert.equal("commit" in t, false);
+  const again = ensureWorktree(run, "b");
+  assert.equal(again.created, true);
+  assert.match(fs.readFileSync(path.join(again.path, "calc.py"), "utf8"), /b [+] 1/); // sees task A's change
+  fs.appendFileSync(path.join(again.path, "calc.py"), "\ndef sub(a, b):\n    return a - b\n");
+  const r = commitTask(run, "b", { tests: "passed" });
+  assert.equal(r.commit, tip(repo, runBranch));
+  assert.equal(readLedger(run).tasks.b.status, "passed");
+});
+
+test("a cleanup failure after the pick is a warning, and the ledger already says passed", () => {
+  const s = setup();
+  // Make 'worktree remove' fail: lock the worktree.
+  git(s.repo, "worktree", "lock", s.t1.path);
+  const r = commitTask(s.run, "t1", { tests: "passed" });
+  assert.ok(r.cleanupWarning);
+  assert.equal(readLedger(s.run).tasks.t1.status, "passed");
+  assert.equal(readLedger(s.run).tasks.t1.commit, r.commit);
 });

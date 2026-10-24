@@ -282,13 +282,35 @@ export function commitTask(run, id, { title, tests, reworkOf } = {}) {
   }
   const commit = git(ledger.runWorktree, "rev-parse", "HEAD").trim();
 
-  // 5. The task's worktree and branch are done with.
-  git(ledger.repo, "worktree", "remove", "--force", wt);
-  gitRaw(ledger.repo, "branch", "-D", branch);
-
-  // 6. Record it.
+  // 5. Record it first: the commit is on the run branch, so the ledger must say so whatever happens next.
   setTask(dir, id, { status: "passed", commit, tests: testsValue });
-  return { commit, files };
+
+  // 6. The task's worktree and branch are done with. Best effort: a failure here is reported, not thrown.
+  const result = { commit, files };
+  try {
+    git(ledger.repo, "worktree", "remove", "--force", wt);
+    git(ledger.repo, "branch", "-D", branch);
+  } catch (e) { result.cleanupWarning = e.message; }
+  return result;
+}
+
+// Throw a task's work away so it can start again from the current run tip. A passed task cannot be discarded.
+export function discardTask(run, id) {
+  checkId(id);
+  const dir = safePath(run ?? "", "run");
+  const ledger = readLedger(dir);
+  if (ledger.tasks[id]?.status === "passed") throw new RunRefused(`task ${id} already passed and is on the run branch; it cannot be discarded`);
+  const wt = path.join(dir, "wt", id);
+  const branch = `orchestrate/${ledger.topic}--${id}`;
+  if (fs.existsSync(wt)) {
+    if (gitRaw(ledger.repo, "worktree", "remove", "--force", wt).code !== 0) fs.rmSync(wt, { recursive: true, force: true });
+  }
+  gitRaw(ledger.repo, "worktree", "prune");
+  if (gitRaw(ledger.repo, "show-ref", "--verify", "-q", `refs/heads/${branch}`).code === 0) git(ledger.repo, "branch", "-D", branch);
+  const { commit: _gone, ...rest } = ledger.tasks[id] ?? {};
+  ledger.tasks[id] = { ...rest, status: "pending" };
+  writeLedger(dir, ledger);
+  return { id, status: "pending" };
 }
 
 export function landRun(run, { mode = "merge" } = {}) {
@@ -301,6 +323,10 @@ export function landRun(run, { mode = "merge" } = {}) {
   if (here.code !== 0 || here.out.trim() !== ledger.userBranch) {
     const now = here.code === 0 ? here.out.trim() : "a detached HEAD";
     throw new RunRefused(`the user's folder is on ${now}, not ${ledger.userBranch}; switch back and land again`);
+  }
+  // Staged edits would be mixed into the squash or lost to conflict cleanup, so land only on a clean index.
+  if (gitRaw(repo, "diff", "--cached", "--quiet").code !== 0) {
+    throw new RunRefused("the user's folder has staged changes; commit or unstage them (git restore --staged .) and land again");
   }
   const changed = git(repo, "diff", "--name-only", "-z", `${base}..${runBranch}`).split("\0").filter(Boolean);
   const dirty = new Set(statusPaths(repo));
@@ -325,7 +351,7 @@ export function landRun(run, { mode = "merge" } = {}) {
   } else {
     const r = gitRaw(repo, "merge", "--squash", runBranch);
     if (r.code !== 0) {
-      gitRaw(repo, "reset", "--merge"); // safe: no file the run changed had uncommitted edits
+      gitRaw(repo, "reset", "--merge"); // safe: the index was clean, and reset --merge keeps unstaged edits
       throw new Conflict(`the run does not apply cleanly to ${ledger.userBranch}: ${(r.out + r.err).trim()}`);
     }
     if (mode === "squash") {
@@ -359,6 +385,7 @@ export const task = (args) => {
   print(setTask(need(args, "--run"), need(args, "--id"), fields));
 };
 export const worktree = (args) => print(ensureWorktree(need(args, "--run"), need(args, "--id")));
+export const discard = (args) => print(discardTask(need(args, "--run"), need(args, "--id")));
 export const status = (args) => print(runStatus(need(args, "--run")));
 export const commit = (args) => {
   const tests = need(args, "--tests");
