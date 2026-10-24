@@ -116,8 +116,10 @@ shows its **source** and **how it is paid**. The same model name can appear more
 | Cursor CLI | `uses your Cursor plan` |
 | Any tool running on an API key (today: Gemini CLI with `GEMINI_API_KEY`; Claude or Codex if they are on an API key) | **⚠ API costs will apply** |
 
-Cursor rows add **⚠ force, no sandbox** on Windows only, because Cursor can only write there with `--force` and its
-sandbox does not exist on Windows. On macOS and Linux Cursor runs with `--sandbox enabled` and gets no warning.
+On Windows, Codex and Cursor rows carry the note `patch mode on Windows: proposes a diff, Claude applies it` (see
+Worker safety). The old write-mode warnings (`⚠ force, no sandbox` for Cursor, `⚠ Windows sandbox: may not write, or
+may write outside its folder` for Codex) are kept as `writeWarnings` and apply only with `--mode write`. On macOS and
+Linux Cursor runs with `--sandbox enabled` and gets no warning.
 
 How the runner tells a plan login from an API key is left to the builder (environment variables, the tool's own
 status command, or its config). If it cannot tell, the row says `may be billed by API key; check` rather than
@@ -227,11 +229,13 @@ Starting points per tool. The builder verifies each against the installed versio
 
 | Tool | Write mode | Shell | Notes |
 |---|---|---|---|
-| Codex | `exec -s workspace-write -C <worktree>`; the user's MCP servers and plugins switched off by name from `CODEX_HOME/config.toml` (`-c mcp_servers.<name>.enabled=false`, `-c plugins."<p>".enabled=false`) | inside its sandbox | Unsafe on Windows (see Live results): the elevated sandbox cannot write, the unelevated one let `apply_patch` write outside the worktree. Menu warning `⚠ Windows sandbox: may not write, or may write outside its folder`. Unverified on macOS/Linux. |
+| Codex | `exec -s workspace-write -C <worktree>`; the user's MCP servers and plugins switched off by name from `CODEX_HOME/config.toml` (`-c mcp_servers.<name>.enabled=false`, `-c plugins."<p>".enabled=false`) | inside its sandbox | Unsafe on Windows (see Live results): the elevated sandbox cannot write, the unelevated one let `apply_patch` write outside the worktree. So on Windows it defaults to patch mode (`-s read-only`; resumed: `-c sandbox_mode=read-only`). Unverified on macOS/Linux. |
 | Claude CLI | `-p` with only Read, Grep, Glob, Edit, Write; no MCP, skills or user settings | no | Used for Haiku/Sonnet workers. Same budget as the session. |
 | Copilot CLI | allow write, deny shell and url, `--add-dir <worktree>` only | no | Not installed on Todd's main machine; must be tested on his other computer (Copilot credits there). Built and tested in v1. |
 | Gemini CLI | an edit-allowing approval mode, no shell | no | API key: always labelled ⚠ API costs will apply. |
-| Cursor CLI | `--force` (only way to write in print mode) | macOS/Linux: `--sandbox enabled`; Windows: none | Works on Windows (wrote in its worktree, session captured, no approval prompt in the live run) but is not confined there; rows carry ⚠ force, no sandbox. Claude Code's auto-mode safety check blocked a `--force` run in the earlier spike, so the skill still tells the user it may need approval. |
+| Cursor CLI | `--force` (only way to write in print mode) | macOS/Linux: `--sandbox enabled`; Windows: none | Works on Windows (wrote in its worktree, session captured, no approval prompt in the live run) but is not confined there, so on Windows it defaults to patch mode (`--mode ask`, never `--force`). Claude Code's auto-mode safety check blocked a `--force` run in the earlier spike, so the skill still tells the user a `--mode write` run may need approval. |
+
+**Patch mode.** `work --mode write|patch`; default `patch` for codex and cursor on Windows, `write` elsewhere; supported for codex, cursor and gemini (gemini: `--approval-mode plan`), exit 2 for claude and copilot. The worker runs read-only and replies with one unified diff in a ```diff block. `work` takes the last block, rejects absolute paths, `..` segments, `.git` paths, rename/copy targets outside the folder and symlinks, then runs `git apply --check` and `git apply --whitespace=nowarn` in the worktree (never `--unsafe-paths`) and saves the diff as `<out>.patch`. Output adds `mode`, `patchApplied`, `patchError`; exit **9** = the diff was missing or did not apply (exit 5 still wins). A failed patch is a failed attempt: the worker gets `patchError` verbatim as a fix round.
 
 **Live results (2026-10-24, Windows).** Claude CLI worker (Haiku): wrote in its worktree, a write to an absolute path
 outside it was refused, session captured: confined. Cursor (Grok 4.7 Medium, `--force`): wrote in its worktree, session
@@ -242,7 +246,7 @@ plugin fails with "invalid transport"), and plugin-provided tools (e.g. a JS REP
 unelevated one its `apply_patch` wrote outside the worktree. Codex write mode is therefore unsafe on Windows. The whole
 lifecycle (start, worktree, work, commit, status, discard, land) worked with correct trailers. Running Python tests in
 a worktree created `__pycache__/`, which `commit` picked up; the skill now has Claude remove such artifacts first.
-Copilot and Gemini write modes are untested.
+Copilot and Gemini write modes are untested. Because of these results, Codex and Cursor on Windows now use patch mode (read-only plus a validated diff); its live retest is pending.
 
 **If a tool fails its write test** (Todd's decision): v1 ships with the tools that pass. A failing tool stays in the
 worker menu marked `experimental: may not write on this machine` until it is fixed; the review menu is unaffected.

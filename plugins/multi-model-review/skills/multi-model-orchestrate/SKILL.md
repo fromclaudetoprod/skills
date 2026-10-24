@@ -90,8 +90,9 @@ Show one table: `# · task · size · model · via · how it's paid · why` (why
    `No, pick another model`. A "No" re-asks with another pick. A label alone is not enough. The billing confirmation is never skipped, even if the user named the model.
 
 Also: offer rows with `writeStatus: "failed"` only with their warning ("experimental: may not write on this
-machine"). For Codex on Windows, say plainly that its sandbox may not write at all, or may write outside its folder (live test), and prefer another model. For Cursor on Windows, tell the user their Claude Code permission settings may ask them to approve the
-`--force` run, and that they are approving a Cursor worker that edits files in its worktree with no sandbox.
+machine"). On Windows, Codex and Cursor run in **patch mode** (read-only; they propose a diff and `work` applies it), so the row
+shows the note `patch mode on Windows: proposes a diff, Claude applies it` and no unsafe-write warning. Only if the
+user asks for `--mode write` on those two, show the row's `writeWarnings` plainly and prefer another model.
 
 ## 5. Start
 ```
@@ -123,10 +124,16 @@ Worker naming is `<model display name or id> via <Tool name CLI>`, e.g. `Grok 4.
    ```
    Pass `--session new` for codex, claude, cursor and gemini, then store the printed `sessionId` with
    `task --set session=<id>`; Copilot has no sessions. Output: `status`, `needs`, `changedFiles`, `outsideChanged`,
-   `usage` and running `totals` (also in `<run>/replies/usage.jsonl`).
+   `mode`, `usage` and running `totals` (also in `<run>/replies/usage.jsonl`). `--mode write|patch` defaults to `patch`
+   for codex and cursor on Windows and `write` elsewhere (see `tools.md`); the output also lists `isolationSkipped`
+   (Codex MCP servers or plugins that could not be switched off). In **patch mode** the worker cannot edit files: it
+   replies with one unified diff, `work` validates it and applies it in the worktree (`patchApplied`, `patchError`,
+   and the diff saved beside the reply as `<out>.patch`). Tell patch-mode workers the task is a diff in the reply.
 4. **Exit codes of `work`:** 0 ok · 3 model unavailable: tell the user, offer the next row · 4 capped:
    `task --set status=stalled --set note="<tool> out of usage"` and offer another model · 5 something changed in the
-   user's repo: **stop the run** and follow the exit-5 rule above (show `git status` and `diff`, ask, `rebaseline` only if the user says it was theirs) · 6 session not found (see `rework.md`) ·
+   user's repo: **stop the run** and follow the exit-5 rule above (show `git status` and `diff`, ask, `rebaseline` only if the user says it was theirs) · 6 session not found (see `rework.md`) · 9 patch mode: the worker's diff was missing or did not apply, which
+   counts as a failed attempt: send the worker the `patchError` verbatim as a fix round, and say the folder already has
+   its earlier change if an earlier diff applied (`rework.md`) ·
    2 anything else: read the `.log` beside `--out`; retry once only if it shows a transient error (network or
    timeout), otherwise ask the user (a blind retry can bill a metered tool twice).
 5. **`needs`:** each entry is a command the worker asked for. Run it only if it is a setup, build, format or codegen
@@ -134,7 +141,7 @@ Worker naming is `<model display name or id> via <Tool name CLI>`, e.g. `Grok 4.
    ask the user about anything else. Then send the worker back (`rework.md`). A failure caused by missing setup is
    not a fix round.
 6. Run the tests yourself in the worktree and save the log to exactly `<run>/tests/t1.log` (`start` creates only `briefs/`; make `tests/` and `diffs/` yourself). `commit` with `--tests passed` or `failed` refuses (exit 2) without a non-empty file at that path. Where the language allows, run tests with cache-writing off (`PYTHONDONTWRITEBYTECODE=1` for Python).
-   **Before `commit`** (it runs `git add -A`) compare `git -C "<wt>" status --porcelain` with the worker's `changedFiles` plus the files from its fix rounds. Delete untracked build or test artifacts the worker did not create (`__pycache__/`, `.pytest_cache/`, coverage output) that the repo does not ignore. Never delete a tracked file.
+   **Before `commit`** (it runs `git add -A`) compare `git -C "<wt>" status --porcelain` with the worker's `changedFiles` plus the files from its fix rounds. List candidates with the dry run `git -C "<wt>" clean -nd`. Delete only paths that are untracked, are not in `changedFiles` or any fix-round list, and are known artifacts (`__pycache__/`, `.pytest_cache/`, `coverage/`, `.coverage`, `*.pyc`). Never delete a tracked file or anything else.
 7. **Gate.** `git -C "<wt>" add -N .` (deliberate, so the diff shows new files) then `git -C "<wt>" diff > "<run>/diffs/t1.patch"`.
    - *This session signs off:* read the diff and the test log; decide against the plan.
    - *Others sign off:* write a review brief at `<run>/briefs/t1-review/brief.md`, a folder of its own apart from the task's (diff pasted in, the task brief, the test log, ending in

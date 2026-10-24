@@ -129,10 +129,14 @@ folder changes, Claude detects it and stops the run; that is detection, not prev
 
 **Status (tested live on Windows, 2026-10-24):**
 - **Claude CLI:** works and is confined. It wrote inside its worktree, and a write to an absolute path outside it was refused.
-- **Cursor (`--force`):** works, but it is not confined on Windows (it has no sandbox there), so the menu says `⚠ force, no sandbox`.
-- **Codex write mode:** unsafe on Windows, so it is shown as experimental with a warning. In the "elevated" Windows
+- **Cursor (`--force`):** works, but it is not confined on Windows (it has no sandbox there). So on Windows Cursor now
+  uses **patch mode** (see below). The old `⚠ force, no sandbox` warning applies only to `--mode write`.
+- **Codex write mode:** unsafe on Windows, so Codex now uses **patch mode** there. In the "elevated" Windows
   sandbox Codex could not write even inside its worktree. In the "unelevated" sandbox its patch tool wrote a file
   outside the worktree. Codex as a read-only reviewer is not affected.
+- **Patch mode (Codex and Cursor on Windows):** the worker runs read-only and answers with a diff; Claude checks the
+  diff (no paths outside the folder, none inside `.git`) and applies it with git. A live retest of patch mode is
+  pending.
 - **Copilot and Gemini write modes:** not tested. macOS and Linux: not tested.
 
 Codex has no single switch for "no MCP servers". Claude switches off your MCP servers and plugins one by one, by
@@ -141,21 +145,22 @@ is not switched off.
 
 | Tool | How it writes | Shell for the worker |
 |---|---|---|
-| Codex | `workspace-write` sandbox; your MCP servers and plugins switched off by name from your Codex config | inside its sandbox. Windows: unsafe, see Status |
+| Codex | `workspace-write` sandbox; your MCP servers and plugins switched off by name from your Codex config. Windows: patch mode, read-only, returns a diff | inside its sandbox. Windows: none (read-only) |
 | Claude CLI | only Read, Grep, Glob, Edit and Write; no MCP, skills or user settings | none |
 | Copilot | write allowed, shell and url denied | none |
-| Gemini | `auto_edit` approval mode | none |
-| Cursor | `--force`; sandbox on macOS and Linux | macOS/Linux: sandboxed. Windows: none (works, but not confined) |
+| Gemini | `auto_edit` approval mode (patch mode: `plan`) | none |
+| Cursor | `--force`; sandbox on macOS and Linux. Windows: patch mode, `--mode ask` without `--force`, returns a diff | macOS/Linux: sandboxed. Windows: none (read-only) |
 
 Limits to know about:
 - **Claude CLI workers share your Claude limits.** They draw from the same budget as this session, so on a plan login
   they do not save Claude usage.
 - **Gemini CLI bills your API key** and asks for a yes first, every run.
-- **Cursor on Windows can only write with `--force` and has no sandbox.** It shows `⚠ force, no sandbox`. Your Claude
-  Code permission settings may ask you to approve the run. You are approving a Cursor worker that edits files in its
-  worktree with nothing confining it. If you say no, Claude offers another model.
+- **Cursor on Windows can only write with `--force` and has no sandbox,** so it runs in patch mode there. If you force
+  `--mode write`, the menu warns `⚠ force, no sandbox`, and your Claude Code permission settings may ask you to approve
+  a worker that edits files with nothing confining it.
 - **Copilot sessions can't be resumed**, and it reports no token usage.
-- **Codex on Windows** may not be able to start a shell, so Claude runs its commands.
+- **Codex on Windows** runs in patch mode and cannot start a shell, so Claude runs its commands. A diff that is
+  missing or does not apply is a failed attempt (exit 9) and goes back to the worker as a fix round.
 - If a tool exits cleanly but changes no files when it should have, Claude records that. The model then shows
   `experimental: may not write on this machine` in the menu until a later run succeeds.
 - If the repository has a rule against committing (in `CLAUDE.md` or `AGENTS.md`), Claude lands the work as
