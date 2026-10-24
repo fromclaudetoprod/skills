@@ -1,5 +1,8 @@
 # Multi-model review
 
+This plugin has two skills. **Review** has other models check your code or draft, read-only. **Orchestrate** hands
+the tasks of a plan to other models that write code. Both use the tools you already have installed.
+
 Ask Claude Code for a review and it runs it in one of two modes:
 
 - **Panel:** several rounds, each by a fresh model, ideally from a different company.
@@ -29,12 +32,18 @@ It lists every model your Cursor and Codex accounts offer (one row per model, ef
 suggested models for Claude, Gemini and Copilot, and over time only models your account can actually use.
 
 ## Pick a setup
-| You have | Reviewers you get |
-|---|---|
-| Claude Code + **Cursor** (simplest) | GPT, Grok, Gemini, Kimi, GLM and Claude models from one Cursor plan |
-| Claude Code + **Gemini API key** | Gemini as the outside reviewer, Claude last |
-| Claude Code + **Codex** (ChatGPT plan) | GPT models |
-| Any mix of the above | the plugin picks a different company each round |
+| You have | Models you get | How it is paid |
+|---|---|---|
+| Claude Code + **Cursor** (simplest) | GPT, Grok, Gemini, Kimi, GLM and Claude models from one Cursor plan | your Cursor plan |
+| Claude Code + **Gemini API key** | Gemini as the outside reviewer or worker, Claude last | your API key, per use |
+| Claude Code + **Codex** (ChatGPT plan) | GPT models | your ChatGPT plan |
+| Claude Code + **Copilot CLI** | the models your Copilot plan offers | Copilot credits |
+| Claude CLI (you already have it) | Claude models | your Claude limits, the same budget as this session |
+| Any mix of the above | the plugin picks a different company each round | each model shows its own label |
+
+Every model in every menu shows its tool and how it is paid. Anything billed to an API key shows
+`⚠ API costs will apply`, and Claude asks for a yes before it runs that model, even if you named it yourself. If it
+cannot tell who gets billed, the label says `may be billed by API key; check` and it asks the same way.
 
 ## Install
 ```
@@ -58,6 +67,90 @@ Say **"Run the multi-model review"**. Claude asks which mode, shows the full num
 
 Or say **"Go back and forth with grok-4.7 on this, five exchanges at most."** Or say it all at once: *"Multi-model review of this branch, three rounds: grok-4.7, then gpt-6.1-sol, then
 claude-opus-5-5."*
+
+## Orchestrate
+Say **"Orchestrate this plan"** (or "have Codex and Cursor do the work"). Claude splits your plan or task list into
+tasks, then recommends how many agents to use (0 to 4) and which model for each task. Each model writes only inside
+its own git worktree. Claude or another model signs off on each task before it is committed.
+
+If the job is small, or the tasks are mostly a chain and your Claude budget is fine, Claude will say it should just do
+the work itself. Splitting a chain across agents saves budget, not time.
+
+### The lineup
+Claude shows one table and asks "Use this lineup?" before anything runs. For example:
+
+| # | task | size | model | via | how it's paid | why |
+|---|---|---|---|---|---|---|
+| 1 | Copy the config templates | light | Claude Haiku 5.5 | Claude CLI | uses your Claude limits (same budget as this session) | cheap and fast for copying |
+| 2 | Rewrite the permissions check | heavy | GPT-6.1-Sol | Codex CLI | uses your ChatGPT plan | careful with tricky logic |
+| 3 | Add the report export | standard | Gemini 4 Argon | Gemini CLI | ⚠ API costs will apply | independent of task 2 |
+
+Row 3 gets a question first: "Gemini 4 Argon via Gemini CLI bills your API key. Use it?" You can change any row, use
+fewer agents, or have Claude do it all.
+
+### Who signs off
+You pick one:
+- **This Claude session (recommended):** Claude reads every change, checks it against the plan, and decides whether it
+  passes or goes back. The most careful option. It uses more of your Claude budget.
+- **Other models:** another model reviews each change and gives a verdict. Claude reads the verdict and runs the
+  tests. Use this when you are close to your Claude limit.
+
+A task that fails goes back to its worker with the findings and the test output, word for word. After three fix
+rounds Claude asks you: a different model, Claude does it, or skip.
+
+### One commit per task
+Workers never commit, push or deploy. Claude commits each task that passes, on a run branch, and nothing is pushed by
+anyone. When the run is done, Claude lands the branch on yours (a merge, or a squash if you ask). The commit message
+says which agent did the work:
+
+```
+Add the report export
+
+Implemented-by: Grok 4.7 High via Cursor CLI
+Worker-session: cursor 4f2c9a1e
+Reviewed-by: Claude, this session
+Fix-rounds: 1
+Tests: passed
+```
+
+A reworked task also carries `Rework-of: <commit>`. `git log --grep "Implemented-by: Grok"` finds what a model wrote.
+
+### Send a task back
+Say **"Send Task 3 back to its agent: the date check is wrong."** Claude reads the trailers on that commit and
+resumes the same worker session, so the model still remembers the task. Copilot sessions can't be resumed, so rework
+gets a fresh session with the original diff and your note. The same happens when any other session has expired, and
+Claude tells you.
+
+### Safety, tool by tool
+Every worker edits files only in its own worktree and has no push, deploy or commit. If anything changes in your own
+folder during the run, the run stops. Claude runs the tests itself.
+
+| Tool | How it writes | Shell for the worker |
+|---|---|---|
+| Codex | `workspace-write` sandbox, your MCP servers switched off | inside its sandbox (may not start on Windows) |
+| Claude CLI | only Read, Grep, Glob, Edit and Write; no MCP, skills or settings | none |
+| Copilot | write allowed, shell and url denied | none |
+| Gemini | `auto_edit` approval mode | none |
+| Cursor | `--force`; sandbox on macOS and Linux | macOS/Linux: sandboxed. Windows: none |
+
+Limits to know about:
+- **Claude CLI workers share your Claude limits.** They draw from the same budget as this session, so on a plan login
+  they do not save Claude usage.
+- **Gemini CLI bills your API key** and asks for a yes first, every run.
+- **Cursor on Windows can only write with `--force` and has no sandbox.** It shows `⚠ force, no sandbox`. Your Claude
+  Code permission settings may ask you to approve the run. You are approving a Cursor worker that edits files in its
+  worktree with nothing confining it. If you say no, Claude offers another model.
+- **Copilot sessions can't be resumed**, and it reports no token usage.
+- **Codex on Windows** may not be able to start a shell, so Claude runs its commands.
+- If a tool exits cleanly but changes no files when it should have, Claude records that. The model then shows
+  `experimental: may not write on this machine` in the menu until a later run succeeds.
+- If the repository has a rule against committing (in `CLAUDE.md` or `AGENTS.md`), Claude lands the work as
+  uncommitted changes and says so.
+- Each brief leaves your machine for that model's company. Claude puts in nothing you have not already shared with it,
+  and never a secret or key.
+
+Run folders (briefs, replies, diffs, test logs, token use) are in `~/.claude/orchestrate/<date>-<topic>/`. Set
+`MMO_RUN_ROOT` to move them. To pick up an interrupted run, say "continue the orchestrate run".
 
 ## Where things go
 | What | Where |

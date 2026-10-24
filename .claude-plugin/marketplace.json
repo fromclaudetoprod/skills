@@ -6,7 +6,7 @@
     {
       "name": "multi-model-review",
       "source": "./plugins/multi-model-review",
-      "description": "Several AI models review your code or draft in turn, read-only, with Claude checking every claim."
+      "description": "Several AI models review your code or draft in turn, read-only, with Claude checking every claim. Also orchestrates: hands plan tasks to other models, each in its own git worktree."
     }
   ]
 }
