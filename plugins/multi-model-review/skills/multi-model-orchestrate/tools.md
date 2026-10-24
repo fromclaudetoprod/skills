@@ -6,7 +6,7 @@ write access to that folder only, and no push, deploy or commit. Flags are set b
 | Tool | Write mode | Shell for the worker | Resumes a session | Billing label |
 |---|---|---|---|---|
 | Codex | `exec -s workspace-write -C <worktree>`, MCP servers switched off | inside its own sandbox (may not start) | yes | `uses your ChatGPT plan` |
-| Claude CLI | `-p` with only Read, Grep, Glob, Edit, Write; no MCP, skills or user settings | none | yes | `uses your Claude limits (same budget as this session)` |
+| Claude CLI | `-p` with Read, Grep, Glob, Edit, Write; edits auto-approved only inside the worktree (`acceptEdits`); no MCP, skills or user settings | none | yes | `uses your Claude limits (same budget as this session)` |
 | Copilot | allow `write`, deny `shell` and `url` | none | no | `uses Copilot credits` |
 | Gemini | `--approval-mode auto_edit` | none | yes | `⚠ API costs will apply` (needs `GEMINI_API_KEY`) |
 | Cursor | `--force` | macOS/Linux: `--sandbox enabled`; Windows: none | yes | `uses your Cursor plan` |
@@ -40,6 +40,11 @@ write access to that folder only, and no push, deploy or commit. Flags are set b
   Cursor worker that edits files in its worktree and may run commands unconfined. Wait for the answer; never work
   around the prompt. If the user declines, offer another model.
 - On macOS and Linux it runs with `--sandbox enabled` and no warning.
+
+## Long paths on Windows
+Worktrees live under `~/.claude/orchestrate/<date>-<topic>/wt/<id>/`, and a package install inside one
+(`node_modules` nests deeply) can pass Windows' 260-character MAX_PATH limit. If an install fails on a long path, set
+`MMO_RUN_ROOT=C:mmo` (a short root) and start the run again.
 
 ## When a tool cannot write
 If a worker exits 0 but `changedFiles` is empty and its reply is not a legitimate "nothing to change":

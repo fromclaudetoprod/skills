@@ -167,7 +167,8 @@ dispute with both sides stated fairly, and a total-tokens line taken from `total
 ## Upkeep
 - Access is learned automatically. After a cap lifts: `node "<this folder>/review.mjs" record <tool> __tool available`.
 - `models.json` holds the suggestions and the never-suggest patterns; edit it as models prove themselves.
-- Cost: Codex and Claude bill to the user's own subscriptions. A Claude reviewer turn is about 12k input tokens
+- Cost: what each tool bills depends on the user's login; the billing labels in the menu say which (a plan, Copilot
+  credits, or an API key). A Claude reviewer turn is about 12k input tokens
   before the brief. Each GitHub Copilot CLI call carries a large built-in system prompt, so even a short round uses a
   noticeable number of Copilot credits. In dialogue mode each exchange re-sends the conversation so far, mostly as
   cached tokens, which most providers bill at a discount.

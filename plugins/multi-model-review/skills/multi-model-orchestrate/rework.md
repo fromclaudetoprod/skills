@@ -3,12 +3,12 @@
 Read this only when sending work back to a worker, resuming a run, or reworking a committed task.
 
 ## Fix round inside a run
-The worker's worktree is still there. Write a new brief `<run>/briefs/t1-fix<n>.md` that carries, verbatim: the
+The worker's worktree is still there. Write a new brief `<run>/briefs/t1/fix<n>.md` (beside the task's `brief.md`) that carries, verbatim: the
 reviewer's findings (or yours) and the failing test output. Do not summarize either. Add the worktree path and "edit
 files only in this folder; do not commit". Then:
 ```
 node --no-deprecation "<this folder>/orchestrate.mjs" work --tool <tool> --model <id> --repo "<repository root>" \
-  --worktree "<wt>" --brief "<run>/briefs/t1-fix<n>.md" --out "<run>/replies/t1-r<n+1>.md" --session <id>
+  --worktree "<wt>" --brief "<run>/briefs/t1/fix<n>.md" --out "<run>/replies/t1-r<n+1>.md" --session <id>
 ```
 - `<id>` is the task's stored `session` (codex, claude, cursor, gemini). Use the same tool and model.
 - Copilot (no sessions): omit `--session`; the new brief must also carry the task text and the diff so far.
@@ -39,7 +39,7 @@ moved by someone else: stop and show `runTip`, `base` and each passed task's `co
 2. If the run is landed, start a new run from the user's current branch (`start`) so the rework has its own run
    branch and worktrees; record a task `t3-rework` with the same worker, tool, model and session.
 3. `worktree --run "<run>" --id t3-rework`, run setup in it.
-4. Brief at `<run>/briefs/t3-rework.md`: the new folder path, what to change (the user's words verbatim), the original
+4. Brief at `<run>/briefs/t3-rework/brief.md`: the new folder path, what to change (the user's words verbatim), the original
    task text and the commit's diff (`git show <sha>`), the test command.
 5. `work ... --worktree "<new wt>" --session <id>` with the same tool and model.
 6. Gate as usual, then `commit --run "<run>" --id t3-rework --tests <…> --rework-of <sha>`.

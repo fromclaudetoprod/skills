@@ -7,7 +7,7 @@ import {
   detect, billingOf, accessFile, readJson, writeJson, MODELS_FILE, familyOf, TOOLS, TOOL_PREFERENCE, UsageError,
 } from "../multi-model-review/core.mjs";
 import { work } from "./workers.mjs";
-import { start, task, worktree, status, commit, land, discard, RunRefused } from "./run.mjs";
+import { start, task, worktree, status, commit, land, discard, rebaselineCmd, RunRefused } from "./run.mjs";
 
 const TIER_ORDER = ["heavy", "standard", "light"];
 
@@ -62,7 +62,7 @@ const COMMANDS = {
   menu: (args) => console.log(JSON.stringify(workerMenu({ platform: flag(args, "--platform") ?? process.platform }), null, 2)),
   "record-write": (args) => { recordWrite(args[0], args[1], args[2]); console.log('{"ok":true}'); },
   work,
-  start, task, worktree, status, commit, land, discard,
+  start, task, worktree, status, commit, land, discard, rebaseline: rebaselineCmd,
 };
 
 function main() {

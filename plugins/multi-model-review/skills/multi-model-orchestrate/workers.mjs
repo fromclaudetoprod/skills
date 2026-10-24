@@ -5,7 +5,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
-  TOOLS, SESSION_TOOLS, MODEL_ID, SESSION_ID, UsageError, safePath, quote, runTool, runGit, binOf, recordOutcome,
+  TOOLS, SESSION_TOOLS, MODEL_ID, SESSION_ID, UsageError, safePath, quote as quoteFor, runTool, runGit, binOf, recordOutcome,
   jsonObjects, sumUsage, parseResult, classifyFailure, repoFingerprint,
 } from "../multi-model-review/core.mjs";
 
@@ -26,6 +26,7 @@ export function workerArgs(tool, { model, worktree, brief, out, session, resume,
   const briefDir = path.dirname(brief);
   const sessionFlags = resume ? ["--resume", resume] : sid ? ["--session-id", sid] : [];
   const cwd = worktree;
+  const quote = (p) => quoteFor(p, platform);
   if (tool === "codex") {
     // `codex exec resume` has no -s or -C flag, so the sandbox is set through config on resumed turns and the
     // folder comes from cwd. mcp_servers={} is the plan's starting point for switching MCP off; verify it live
@@ -37,11 +38,14 @@ export function workerArgs(tool, { model, worktree, brief, out, session, resume,
     return { cmd: "codex", args, input: fs.readFileSync(brief, "utf8"), cwd };
   }
   if (tool === "claude") {
-    // No --add-dir, so the worker can write only under cwd. Edit and Write are allowed; no shell, no web.
+    // No --add-dir, and Edit and Write are NOT in --allowedTools (an allow rule has no path scope). They stay in
+    // --tools so the model has them, and --permission-mode acceptEdits auto-approves edits only inside the working
+    // folder; a write outside it is refused. No shell, no web.
+    // verify live: Claude worker still writes in cwd and is refused outside it
     return { cmd: "claude", cwd, input: fs.readFileSync(brief, "utf8"), args: ["-p", "--model", model, ...sessionFlags,
       "--output-format", "json", "--tools", "Read,Grep,Glob,Edit,Write", "--strict-mcp-config", "--disable-slash-commands",
       "--setting-sources", "project,local", "--permission-mode", "acceptEdits",
-      "--allowedTools", "Read", "Grep", "Glob", "Edit", "Write",
+      "--allowedTools", "Read", "Grep", "Glob",
       "--disallowedTools", "Bash", "PowerShell", "NotebookEdit", "WebFetch", "WebSearch"] };
   }
   if (tool === "gemini") {

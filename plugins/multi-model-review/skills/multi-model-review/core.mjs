@@ -38,7 +38,9 @@ export function safePath(p, label) {
   if (UNSAFE_PATH.test(abs)) fail(`${label} path contains a character that is not allowed here: ${abs}`);
   return abs;
 }
-export const quote = (p) => `"${p}"`;
+// Only Windows runs tools through a shell (the .cmd shims), so only there do paths and prompts need quotes. Elsewhere
+// the argument goes straight to the program and quote characters would arrive as literal text.
+export const quote = (p, platform = process.platform) => (platform === "win32" ? `"${p}"` : String(p));
 
 // npm-installed CLIs are .cmd shims on Windows, which need a shell. Every argument we pass is either a fixed
 // flag, a validated model or session id, or a validated, quoted path, so nothing user-typed reaches the shell raw.

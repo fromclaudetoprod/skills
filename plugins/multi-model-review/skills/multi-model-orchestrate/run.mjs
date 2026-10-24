@@ -31,7 +31,7 @@ const checkId = (id) => {
 };
 const STATUSES = ["pending", "running", "passed", "stalled", "skipped", "failed"];
 const TEST_STATES = ["passed", "failed", "not run"];
-const TASK_KEYS = ["title", "status", "worker", "tool", "model", "session", "reviewer", "fixRounds", "tests", "commit", "note", "wave"];
+const TASK_KEYS = ["title", "status", "worker", "tool", "model", "session", "reviewer", "fixRounds", "tests", "testLog", "commit", "note", "wave"];
 const MAX_TEXT = 500;
 
 export const runRoot = () => process.env.MMO_RUN_ROOT || path.join(os.homedir(), ".claude", "orchestrate");
@@ -245,6 +245,12 @@ export function commitTask(run, id, { title, tests, reworkOf } = {}) {
   const subject = checkField("title", title ?? t.title ?? "");
   if (!subject.trim()) throw new UsageError("a commit needs a title: pass --title or set the task's title");
   if (reworkOf !== undefined) checkField("commit", reworkOf);
+  // A claim of passed or failed needs the test output behind it, saved at <run>/tests/<id>.log.
+  const testLog = path.join(dir, "tests", `${id}.log`);
+  const hasLog = fs.existsSync(testLog) && fs.statSync(testLog).isFile() && fs.statSync(testLog).size > 0;
+  if (testsValue !== "not run" && !hasLog) {
+    throw new UsageError(`--tests ${testsValue} needs the test output saved in a non-empty file at ${testLog}; save it there and commit again (or use --tests not-run)`);
+  }
 
   // 1. Nothing in the user's folder may have changed since the run started. The fingerprint also catches a
   //    further edit to a file that was already dirty, which the status text alone would miss.
@@ -255,7 +261,14 @@ export function commitTask(run, id, { title, tests, reworkOf } = {}) {
   const wt = path.join(dir, "wt", id);
   const branch = `orchestrate/${ledger.topic}--${id}`;
   if (!fs.existsSync(wt)) throw new RunRefused(`no worktree for task ${id}: ${wt}`);
-  if (git(wt, "status", "--porcelain").trim() === "") throw new NothingToCommit(`task ${id} changed nothing in its worktree`);
+  if (git(wt, "status", "--porcelain").trim() === "") {
+    // A clean worktree whose branch is ahead of the run branch means an earlier commit hit a conflict and was kept.
+    const ahead = gitRaw(ledger.repo, "rev-list", "--count", `${ledger.runBranch}..${branch}`);
+    if (ahead.code === 0 && Number(ahead.out.trim()) > 0) {
+      throw new NothingToCommit(`task ${id} has a commit that is not on the run branch (an earlier commit conflicted). Run discard for ${id}, then redo the task from the current run tip`);
+    }
+    throw new NothingToCommit(`task ${id} changed nothing in its worktree`);
+  }
 
   // 3. Commit in the task worktree, with the agent trailers.
   const trailers = [];
@@ -283,7 +296,7 @@ export function commitTask(run, id, { title, tests, reworkOf } = {}) {
   const commit = git(ledger.runWorktree, "rev-parse", "HEAD").trim();
 
   // 5. Record it first: the commit is on the run branch, so the ledger must say so whatever happens next.
-  setTask(dir, id, { status: "passed", commit, tests: testsValue });
+  setTask(dir, id, { status: "passed", commit, tests: testsValue, ...(testsValue !== "not run" ? { testLog } : {}) });
 
   // 6. The task's worktree and branch are done with. Best effort: a failure here is reported, not thrown.
   const result = { commit, files };
@@ -292,6 +305,22 @@ export function commitTask(run, id, { title, tests, reworkOf } = {}) {
     git(ledger.repo, "branch", "-D", branch);
   } catch (e) { result.cleanupWarning = e.message; }
   return result;
+}
+
+// After the user confirms a change in their folder was theirs: take the fingerprint again so the run can continue.
+// Refused when the user's folder is no longer on the branch the run started from.
+export function rebaseline(run) {
+  const dir = safePath(run ?? "", "run");
+  const ledger = readLedger(dir);
+  const here = gitRaw(ledger.repo, "symbolic-ref", "-q", "--short", "HEAD");
+  if (here.code !== 0 || here.out.trim() !== ledger.userBranch) {
+    const now = here.code === 0 ? here.out.trim() : "a detached HEAD";
+    throw new RunRefused(`the user's folder is on ${now}, not ${ledger.userBranch}; switch back before rebaselining`);
+  }
+  const userStatusAtStart = git(ledger.repo, "status", "--porcelain");
+  const next = { ...ledger, userStatusAtStart, userFingerprintAtStart: repoFingerprint(ledger.repo), dirty: dirtyPaths(userStatusAtStart) };
+  writeLedger(dir, next);
+  return { ok: true, dirty: next.dirty };
 }
 
 // Throw a task's work away so it can start again from the current run tip. A passed task cannot be discarded.
@@ -386,6 +415,7 @@ export const task = (args) => {
 };
 export const worktree = (args) => print(ensureWorktree(need(args, "--run"), need(args, "--id")));
 export const discard = (args) => print(discardTask(need(args, "--run"), need(args, "--id")));
+export const rebaselineCmd = (args) => print(rebaseline(need(args, "--run")));
 export const status = (args) => print(runStatus(need(args, "--run")));
 export const commit = (args) => {
   const tests = need(args, "--tests");

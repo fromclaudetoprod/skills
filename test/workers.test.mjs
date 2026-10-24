@@ -23,9 +23,12 @@ test("codex writes in its sandbox with MCP off", () => {
   assert.ok(!r.includes("read-only"));
 });
 
-test("claude gets edit tools but no shell or web", () => {
+test("claude gets edit tools but no shell or web, and edits are not allowed by path-less rules", () => {
   const a = args("claude");
   assert.ok(has(a, "--tools", "Read,Grep,Glob,Edit,Write"));
+  assert.ok(has(a, "--permission-mode", "acceptEdits"));
+  const allowed = a.slice(a.indexOf("--allowedTools") + 1, a.indexOf("--disallowedTools"));
+  assert.deepEqual(allowed, ["Read", "Grep", "Glob"]);
   assert.ok(has(a, "--disallowedTools", "Bash", "PowerShell", "NotebookEdit", "WebFetch", "WebSearch"));
   assert.ok(!a.includes("--add-dir"));
 });
@@ -48,9 +51,11 @@ test("cursor sandbox only off Windows", () => {
   assert.ok(lin.includes("--force") && win.includes("--force"));
 });
 
-test("paths with spaces are quoted", () => {
-  const wt = "C:\\Users\\Jane Doe\\wt\\t1";
-  assert.ok(args("codex", { worktree: wt }).includes(`"${wt}"`));
+test("paths are quoted on Windows only", () => {
+  const wt = "C:\Users\Jane Doe\wt\t1";
+  assert.ok(args("codex", { worktree: wt, platform: "win32" }).includes(`"${wt}"`));
+  assert.ok(args("codex", { worktree: wt, platform: "linux" }).includes(wt));
+  assert.ok(!args("gemini", { platform: "darwin" }).some((x) => x.includes('"')));
 });
 
 test("session flags follow review: claude, gemini, cursor", () => {

@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpDir, makeRepo, git, runCli } from "./helpers.mjs";
-import { jsonObjects, sumUsage, splitVariant, familyOf, parseResult, classifyFailure, safePath, UsageError, record, accessFile }
+import { jsonObjects, sumUsage, splitVariant, familyOf, parseResult, classifyFailure, safePath, quote, UsageError, record, accessFile }
   from "../plugins/multi-model-review/skills/multi-model-review/core.mjs";
 
 const REVIEW = fileURLToPath(new URL("../plugins/multi-model-review/skills/multi-model-review/review.mjs", import.meta.url));
@@ -101,4 +101,10 @@ test("makeRepo builds a repo on main whose path has a space", () => {
   assert.match(dir, / /);
   assert.equal(git(dir, "rev-parse", "--abbrev-ref", "HEAD").trim(), "main");
   assert.equal(git(dir, "ls-files").trim(), "calc.py");
+});
+
+test("quote adds quote characters on Windows only", () => {
+  assert.equal(quote("C:\a b\c", "win32"), '"C:\a b\c"');
+  assert.equal(quote("/a b/c", "linux"), "/a b/c");
+  assert.equal(quote("/a b/c", "darwin"), "/a b/c");
 });

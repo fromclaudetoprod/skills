@@ -11,7 +11,7 @@ commit, push or deploy; only `orchestrate.mjs commit` commits, and nothing is pu
 
 Helper: `orchestrate.mjs`, in the same folder as this file. Run it as
 `node --no-deprecation "<this folder>/orchestrate.mjs" <command> …`. Commands: `menu`, `record-write`, `start`,
-`task`, `worktree`, `work`, `status`, `commit`, `land`, `discard`. Every command prints JSON.
+`task`, `worktree`, `work`, `status`, `commit`, `rebaseline`, `land`, `discard`. Every command prints JSON.
 The review helper is `../multi-model-review/review.mjs`. Read only the file you need, when you need it:
 - `tools.md`: before the first `work` call with a tool you have not used in this run.
 - `rework.md`: only when resuming, reworking an earlier task, or sending a fix back to a worker's session.
@@ -23,6 +23,11 @@ Rules for the whole run:
 - **Fold first.** When you have budget left and the tasks are mostly a chain, doing it in this session is often
   better: fewer handoffs, no lost context. Orchestrate when the user's Claude budget is short or the tasks are truly
   independent. Split by task and files, never by specialty ("frontend agent", "backend agent").
+- **Nothing in the user's repo changes during a run, except through you.** Exit 5 from `work`, `commit` or the
+  review gate means something wrote there: stop, show the user what changed (`git -C "<repo>" status` and `git -C
+  "<repo>" diff`) and ask whether the change was theirs. If it was theirs, run `rebaseline --run "<run>"` (it takes
+  the baseline again; exit 7 if their branch changed) and continue. If not, stop the run. Rebaseline only after the user
+  confirms, never on your own judgment.
 - **A brief leaves this machine for that model's company.** Put in nothing the user has not already shared with you,
   and never a secret, key, token or customer data.
 
@@ -95,6 +100,7 @@ node --no-deprecation "<this folder>/orchestrate.mjs" start --repo "<repository 
 Prints `run` (the folder `<run>`), `runBranch`, `base`, `userBranch` and `dirty` (the user's uncommitted files). If the
 plan depends on any file in `dirty`, stop and ask the user to commit or stash it first; never leave it out silently.
 Exit 7 = refused (no commits, detached HEAD, submodules, run folder inside the repo): show the reason.
+Tell the user to avoid editing the repo while the run is going; any edit there stops the run (exit 5).
 Then record every task:
 ```
 node --no-deprecation "<this folder>/orchestrate.mjs" task --run "<run>" --id t1 --set title="…" --set wave=1 \
@@ -106,41 +112,43 @@ Worker naming is `<model display name or id> via <Tool name CLI>`, e.g. `Grok 4.
 ## 6. Each task
 1. `worktree --run "<run>" --id t1` prints `path`. Run the setup command inside it (setup runs once per worktree).
    Copy untracked files the build needs (`.env`) only if the user named them.
-2. Write the brief to `<run>/briefs/t1.md`, never into the worktree: the task text verbatim, the spec or plan path,
+2. Write the brief to `<run>/briefs/t1/brief.md` (each task gets its own folder, because Gemini, Cursor and Copilot can
+   write there), never into the worktree: the task text verbatim, the spec or plan path,
    files, what done means, the test command, and "edit files only in this folder; do not commit". Say workers cannot
    run commands.
 3. Run the worker (in the background, 30-minute ceiling):
    ```
    node --no-deprecation "<this folder>/orchestrate.mjs" work --tool <tool> --model <id> --repo "<repository root>" \
-     --worktree "<wt>" --brief "<run>/briefs/t1.md" --out "<run>/replies/t1-r1.md" [--session new]
+     --worktree "<wt>" --brief "<run>/briefs/t1/brief.md" --out "<run>/replies/t1-r1.md" [--session new]
    ```
    Pass `--session new` for codex, claude, cursor and gemini, then store the printed `sessionId` with
    `task --set session=<id>`; Copilot has no sessions. Output: `status`, `needs`, `changedFiles`, `outsideChanged`,
    `usage` and running `totals` (also in `<run>/replies/usage.jsonl`).
 4. **Exit codes of `work`:** 0 ok · 3 model unavailable: tell the user, offer the next row · 4 capped:
    `task --set status=stalled --set note="<tool> out of usage"` and offer another model · 5 something changed in the
-   user's repo: **stop the run** and tell the user, showing `git status` · 6 session not found (see `rework.md`) ·
+   user's repo: **stop the run** and follow the exit-5 rule above (show `git status` and `diff`, ask, `rebaseline` only if the user says it was theirs) · 6 session not found (see `rework.md`) ·
    2 anything else: read the `.log` beside `--out`; retry once only if it shows a transient error (network or
    timeout), otherwise ask the user (a blind retry can bill a metered tool twice).
 5. **`needs`:** each entry is a command the worker asked for. Run it only if it is a setup, build, format or codegen
    command inside the worktree. Never run migrations, pushes, deploys, or network calls outside the package manager;
    ask the user about anything else. Then send the worker back (`rework.md`). A failure caused by missing setup is
    not a fix round.
-6. Run the tests yourself in the worktree and save the log to `<run>/tests/t1.log` (`start` creates only `briefs/`; make `tests/` and `diffs/` yourself).
+6. Run the tests yourself in the worktree and save the log to exactly `<run>/tests/t1.log` (`start` creates only `briefs/`; make `tests/` and `diffs/` yourself). `commit` with `--tests passed` or `failed` refuses (exit 2) without a non-empty file at that path.
 7. **Gate.** `git -C "<wt>" add -N .` (deliberate, so the diff shows new files) then `git -C "<wt>" diff > "<run>/diffs/t1.patch"`.
    - *This session signs off:* read the diff and the test log; decide against the plan.
-   - *Others sign off:* write a review brief (diff pasted in, the task brief, the test log, ending in
+   - *Others sign off:* write a review brief at `<run>/briefs/t1-review/brief.md`, a folder of its own apart from the task's (diff pasted in, the task brief, the test log, ending in
      `VERDICT: AGREE` or `VERDICT: REVISE` with `## Required changes`, as in `multi-model-review` step 4) and run
      `review.mjs run --tool <t> --model <id> --brief … --out … --repo "<wt>"`. Read only the `verdict` and the test
      result. Check reviewer claims before sending them on. `review.mjs run` exits: 5 (`treeChanged`) stop the run like
-     `work`; 2, 3 or 4 pick another reviewer, or ask.
+     `work` (exit-5 rule above); 2, 3 or 4 pick another reviewer, or ask.
 8. **Fail:** send the worker the reviewer's or your findings and the failing test output verbatim (`rework.md`) and
    count one fix round: `task --set fixRounds=<n>`. At most **3 fix rounds**, then ask the user: a different model /
    Claude does it / skip (`task --set status=skipped`).
 9. **Pass:** `commit --run "<run>" --id t1 --tests <passed|failed|not-run>`. Prints `commit`, `files`, and
    `cleanupWarning` if removing the worktree failed (mention it in the report; it is not a failure). Exit 8 = the
-   worker changed nothing: treat as a failed attempt. Exit 5 = the user's folder changed: stop the run and tell the
-   user. Exit 7 `Conflict` (the reason lists files): `discard --run "<run>" --id t1`, `worktree` again (fresh from the
+   worker changed nothing: treat as a failed attempt (if the reason says the task has a commit that is not on the run
+   branch, an earlier commit conflicted: `discard` and redo). Exit 5 = the user's folder changed: follow the exit-5 rule
+   above. Exit 7 `Conflict` (the reason lists files): `discard --run "<run>" --id t1`, `worktree` again (fresh from the
    new tip), then send the worker the conflicting files and its earlier diff.
 
 ## 7. Waves

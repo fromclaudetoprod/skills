@@ -4,11 +4,18 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import {
-  startRun, ensureWorktree, setTask, readLedger, commitTask, landRun, discardTask, RunRefused, OutsideChange, NothingToCommit, Conflict,
+  startRun, ensureWorktree, setTask, readLedger, commitTask as rawCommit, landRun, rebaseline, discardTask, RunRefused, OutsideChange, NothingToCommit, Conflict,
 } from "../plugins/multi-model-review/skills/multi-model-orchestrate/run.mjs";
+import { UsageError } from "../plugins/multi-model-review/skills/multi-model-review/core.mjs";
 import { tmpDir, runCli, git, makeRepo } from "./helpers.mjs";
 
 const CLI = path.resolve("plugins/multi-model-review/skills/multi-model-orchestrate/orchestrate.mjs");
+// commit with --tests passed or failed needs the test output saved at <run>/tests/<id>.log.
+const saveLog = (run, id, text = "ran 3 tests, all ok\n") => {
+  fs.mkdirSync(path.join(run, "tests"), { recursive: true });
+  fs.writeFileSync(path.join(run, "tests", `${id}.log`), text);
+};
+const commitTask = (run, id, o = {}) => { if (o.tests !== "not run") saveLog(run, id); return rawCommit(run, id, o); };
 const SUB = "def subtract(a, b):\n    return a - b\n";
 const TASK1 = { title: "Task 1: subtract", worker: "GPT-6.1-Sol via Codex CLI", tool: "codex", session: "019a",
   reviewer: "Claude Opus 5.5 (this session)", fixRounds: 1 };
@@ -79,6 +86,7 @@ test("refuses when the user's folder changed", () => {
   assert.throws(() => commitTask(s.run, "t1", { tests: "passed" }), OutsideChange);
   assert.equal(tip(s.repo, s.runBranch), before);
   assert.ok(fs.existsSync(s.t1.path));
+  saveLog(s.run, "t1");
   const r = runCli(CLI, ["commit", "--run", s.run, "--id", "t1", "--tests", "passed"]);
   assert.equal(r.code, 5);
   assert.match(r.json.reason, /changed/);
@@ -141,6 +149,7 @@ test("committing works with no git identity configured", () => {
 	autocrlf = ${eol}
 ` : "");
   const env = { HOME: emptyHome, USERPROFILE: emptyHome, XDG_CONFIG_HOME: emptyHome, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: globalConfig };
+  saveLog(s.run, "t1");
   const r = runCli(CLI, ["commit", "--run", s.run, "--id", "t1", "--tests", "passed"], { env });
   assert.equal(r.code, 0, r.err);
   assert.equal(git(s.repo, "log", "-1", "--format=%an <%ae>", s.runBranch).trim(), "Orchestrate <orchestrate@localhost>");
@@ -307,7 +316,10 @@ test("a conflicted task can be discarded and redone from the new run tip", () =>
   setTask(run, "b", { title: "Task B" });
   commitTask(run, "a", { tests: "passed" });
   assert.throws(() => commitTask(run, "b", { tests: "passed" }), Conflict);
-  assert.equal(runCli(CLI, ["commit", "--run", run, "--id", "b", "--tests", "passed"]).code, 8);
+  saveLog(run, "b");
+  const again8 = runCli(CLI, ["commit", "--run", run, "--id", "b", "--tests", "passed"]);
+  assert.equal(again8.code, 8);
+  assert.match(again8.json.reason, /discard/);
   assert.throws(() => discardTask(run, "a"), (e) => e instanceof RunRefused && e.exitCode === 7);
   const d = runCli(CLI, ["discard", "--run", run, "--id", "b"]);
   assert.equal(d.code, 0, d.err);
@@ -333,4 +345,48 @@ test("a cleanup failure after the pick is a warning, and the ledger already says
   assert.ok(r.cleanupWarning);
   assert.equal(readLedger(s.run).tasks.t1.status, "passed");
   assert.equal(readLedger(s.run).tasks.t1.commit, r.commit);
+});
+
+test("passed or failed tests need a non-empty log at <run>/tests/<id>.log; not run needs none", () => {
+  const s = setup();
+  const before = tip(s.repo, s.runBranch);
+  for (const tests of ["passed", "failed"]) {
+    assert.throws(() => rawCommit(s.run, "t1", { tests }), (e) => e instanceof UsageError && e.message.includes(path.join(s.run, "tests", "t1.log")));
+  }
+  saveLog(s.run, "t1", "");
+  assert.throws(() => rawCommit(s.run, "t1", { tests: "passed" }), /non-empty/);
+  const cli = runCli(CLI, ["commit", "--run", s.run, "--id", "t1", "--tests", "passed"]);
+  assert.equal(cli.code, 2);
+  assert.equal(tip(s.repo, s.runBranch), before);
+  const r = rawCommit(s.run, "t1", { tests: "not run" });
+  assert.equal("testLog" in readLedger(s.run).tasks.t1, false);
+  assert.ok(r.commit);
+});
+
+test("a recorded test log path lands in the ledger", () => {
+  const s = setup();
+  commitTask(s.run, "t1", { tests: "failed" });
+  assert.equal(readLedger(s.run).tasks.t1.testLog, path.join(s.run, "tests", "t1.log"));
+});
+
+test("rebaseline accepts the user's edit and the run can commit again", () => {
+  const s = setup();
+  fs.writeFileSync(path.join(s.repo, "mine.txt"), "my own work");
+  assert.throws(() => commitTask(s.run, "t1", { tests: "passed" }), OutsideChange);
+  const r = runCli(CLI, ["rebaseline", "--run", s.run]);
+  assert.equal(r.code, 0, r.err);
+  assert.deepEqual(r.json.dirty, ["mine.txt"]);
+  assert.deepEqual(readLedger(s.run).dirty, ["mine.txt"]);
+  assert.doesNotThrow(() => commitTask(s.run, "t1", { tests: "passed" }));
+});
+
+test("rebaseline is refused (exit 7) when the user switched branches", () => {
+  const s = setup();
+  git(s.repo, "switch", "-q", "-c", "elsewhere");
+  const before = readLedger(s.run).userFingerprintAtStart;
+  const r = runCli(CLI, ["rebaseline", "--run", s.run]);
+  assert.equal(r.code, 7);
+  assert.match(r.json.reason, /main/);
+  assert.equal(readLedger(s.run).userFingerprintAtStart, before);
+  assert.throws(() => rebaseline(s.run), RunRefused);
 });

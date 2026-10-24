@@ -27,7 +27,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { TOOLS, SESSION_TOOLS, MODEL_ID, SESSION_ID, UsageError, safePath, quote, runTool, binOf, detect, menu, plan, record,
-  jsonObjects, sumUsage, parseResult, classifyFailure, recordOutcome } from "./core.mjs";
+  jsonObjects, sumUsage, parseResult, classifyFailure, recordOutcome, repoFingerprint } from "./core.mjs";
 
 const fail = (message) => { throw new UsageError(message); };
 
@@ -44,7 +44,10 @@ function run() {
   const repo = flag("repo") ? safePath(flag("repo"), "repo") : null;
   const workdir = repo ?? path.dirname(brief);
   const resume = session && session !== "new" ? session : null;
-  const treeBefore = repo ? runTool("git", ["-C", quote(repo), "status", "--porcelain"]).out : null;
+  // The fingerprint (status, full diff, untracked file contents) catches a further edit to a file that was already
+  // modified, which a worktree at the review gate always has.
+  let treeBefore = null;
+  if (repo) { try { treeBefore = repoFingerprint(repo); } catch (e) { fail(e.message); } }
   const ask = `Read the review brief at ${brief} and do exactly what it asks. You are read-only: do not create, change or delete any file and do not run commands. Your answer is the full review, ending with the VERDICT line the brief asks for.`;
 
   let r, sid = null, chat = resume;
@@ -106,7 +109,7 @@ function run() {
   if (usage) fs.appendFileSync(usageFile, JSON.stringify({ at: new Date().toISOString(), tool, model, sessionId, reply: path.basename(out), ...usage }) + "\n");
   const totals = sumUsage(fs.existsSync(usageFile) ? jsonObjects(fs.readFileSync(usageFile, "utf8")) : []);
 
-  const treeChanged = repo ? runTool("git", ["-C", quote(repo), "status", "--porcelain"]).out !== treeBefore : false;
+  const treeChanged = repo ? repoFingerprint(repo) !== treeBefore : false;
   const reply = fs.existsSync(out) ? fs.readFileSync(out, "utf8") : "";
   const verdict = reply.match(/VERDICT:\s*(AGREE|REVISE)/i)?.[1]?.toUpperCase() ?? null;
   console.log(JSON.stringify({ tool, model, exitCode: r.code, status, verdict, out, treeChanged, replyBytes: Buffer.byteLength(reply),

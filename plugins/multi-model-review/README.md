@@ -124,7 +124,7 @@ Claude tells you.
 ### Safety, tool by tool
 Workers are told to edit files only in their own worktree, and are not allowed to commit or push. Where the table
 below says so, the tool's own sandbox or permission flags enforce this (Codex `workspace-write`, the Claude CLI tool
-allowlist, Cursor's sandbox on macOS and Linux). Elsewhere it rests on the instruction. If anything in your own
+allowlist and working-folder-only edit approval, Cursor's sandbox on macOS and Linux). Elsewhere it rests on the instruction. If anything in your own
 folder changes, Claude detects it and stops the run; that is detection, not prevention. Claude runs the tests itself.
 
 **Status:** only the Claude CLI worker has been run end to end so far. The Codex, Copilot, Gemini and Cursor write
@@ -153,6 +153,10 @@ Limits to know about:
   uncommitted changes and says so.
 - Each brief leaves your machine for that model's company. Claude puts in nothing you have not already shared with it,
   and never a secret or key.
+
+Claude saves each task's test output in the run folder and will not record `Tests: passed` or `failed` without it. If
+you edit your own folder on purpose during a run, Claude shows you the change and asks; only on your yes does it
+`rebaseline` and carry on.
 
 Run folders (briefs, replies, diffs, test logs, token use) are in `~/.claude/orchestrate/<date>-<topic>/`. Set
 `MMO_RUN_ROOT` to move them. To pick up an interrupted run, say "continue the orchestrate run".
