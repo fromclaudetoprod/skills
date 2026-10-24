@@ -5,7 +5,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
-  TOOLS, SESSION_TOOLS, MODEL_ID, SESSION_ID, UsageError, safePath, quote as quoteFor, runTool, runGit, binOf, recordOutcome,
+  TOOLS, SESSION_TOOLS, MODEL_ID, SESSION_ID, UsageError, CODEX_HOME, safePath, quote as quoteFor, runTool, runGit, binOf, recordOutcome,
   jsonObjects, sumUsage, parseResult, classifyFailure, repoFingerprint,
 } from "../multi-model-review/core.mjs";
 
@@ -20,8 +20,36 @@ export const parseNeeds = (text) => (text ?? "").split(/\r?\n/).flatMap((l) => {
   return m ? [m[1]] : [];
 });
 
+// Codex has no "all MCP off" switch (live test 2026-10-24: `-c mcp_servers={}` leaves the user's servers running).
+// Each server and plugin has to be disabled by name, from the user's own config.toml. Pure: takes the file text.
+// Servers come from `[mcp_servers.<name>]` headers (sub-tables such as `[mcp_servers.x.env]` count once), plugins
+// from `[plugins."<name>"]` headers. Returns raw values for `-c`; workerArgs does the shell quoting.
+const KEY = `(${/"(?:[^"\\\r\n]|\\.)*"|[A-Za-z0-9_-]+/.source})`;
+const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9._@:+\/-]*$/; // nothing cmd.exe or a TOML key would misread
+const HEADER = new RegExp(String.raw`^\s*\[\s*(mcp_servers|plugins)\s*\.\s*` + KEY);
+export function codexIsolationArgs(configText) {
+  const names = { mcp_servers: new Set(), plugins: new Set() };
+  for (const line of String(configText ?? "").split(/\r?\n/)) {
+    const m = line.match(HEADER);
+    if (!m) continue;
+    const name = m[2].startsWith('"') ? m[2].slice(1, -1) : m[2];
+    if (SAFE_NAME.test(name)) names[m[1]].add(name);
+  }
+  const key = (n) => (/^[A-Za-z0-9_-]+$/.test(n) ? n : `"${n}"`);
+  return [
+    ...[...names.mcp_servers].flatMap((n) => ["-c", `mcp_servers.${key(n)}.enabled=false`]),
+    ...[...names.plugins].flatMap((n) => ["-c", `plugins.${key(n)}.enabled=false`]),
+    "-c", 'web_search="disabled"',
+  ];
+}
+// A `-c` value holds TOML quotes. Through cmd.exe the C runtime would eat them, so wrap the value and escape them.
+export const configArg = (v, platform = process.platform) => (platform === "win32" && v.includes('"') ? `"${v.replace(/"/g, '\\"')}"` : v);
+export function readCodexConfig(codexHome = CODEX_HOME) {
+  try { return fs.readFileSync(path.join(codexHome, "config.toml"), "utf8"); } catch { return ""; }
+}
+
 // worktree and brief are absolute and already safe. sid is the session id chosen up front (claude, gemini).
-export function workerArgs(tool, { model, worktree, brief, out, session, resume, chat, sid, platform = process.platform }) {
+export function workerArgs(tool, { model, worktree, brief, out, session, resume, chat, sid, isolation = [], platform = process.platform }) {
   const ask = WORKER_ASK(brief);
   const briefDir = path.dirname(brief);
   const sessionFlags = resume ? ["--resume", resume] : sid ? ["--session-id", sid] : [];
@@ -29,12 +57,14 @@ export function workerArgs(tool, { model, worktree, brief, out, session, resume,
   const quote = (p) => quoteFor(p, platform);
   if (tool === "codex") {
     // `codex exec resume` has no -s or -C flag, so the sandbox is set through config on resumed turns and the
-    // folder comes from cwd. mcp_servers={} is the plan's starting point for switching MCP off; verify it live
-    // in the acceptance task.
+    // folder comes from cwd. MCP servers and plugins are switched off one by one (see codexIsolationArgs).
+    // Live 2026-10-24: Codex write mode is unsafe on Windows (the elevated sandbox cannot write; in the unelevated
+    // one apply_patch wrote outside the worktree), so the menu warns there.
+    const iso = isolation.map((v) => (v === "-c" ? v : configArg(v, platform)));
     const common = ["--json", "--skip-git-repo-check", "-m", model, "-o", quote(out)];
     const args = resume
-      ? ["exec", "resume", ...common, "-c", "sandbox_mode=workspace-write", "-c", "mcp_servers={}", resume, "-"]
-      : ["exec", ...common, "-s", "workspace-write", "-C", quote(worktree), "-c", "mcp_servers={}", "-"];
+      ? ["exec", "resume", ...common, "-c", "sandbox_mode=workspace-write", ...iso, resume, "-"]
+      : ["exec", ...common, "-s", "workspace-write", "-C", quote(worktree), ...iso, "-"];
     return { cmd: "codex", args, input: fs.readFileSync(brief, "utf8"), cwd };
   }
   if (tool === "claude") {
@@ -110,7 +140,8 @@ export function work(args) {
     if (c.code !== 0 || !chat || !SESSION_ID.test(chat)) fail(`could not start a Cursor chat: ${c.err || c.out}`.trim());
   }
 
-  const w = workerArgs(tool, { model, worktree, brief, out, session, resume, chat, sid });
+  const isolation = tool === "codex" ? codexIsolationArgs(readCodexConfig()) : [];
+  const w = workerArgs(tool, { model, worktree, brief, out, session, resume, chat, sid, isolation });
   const r = runTool(w.cmd, w.args, { input: w.input, cwd: w.cwd, timeout: TIMEOUT });
   const { text, sessionId, usage } = parseResult(tool, r, { session, resume, sid, chat });
   const outcome = classifyFailure(r, { resume });

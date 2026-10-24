@@ -27,6 +27,15 @@ test("cursor warns only on Windows", () => {
   assert.ok(!rows("darwin").find((x) => x.tool === "cursor").warnings.includes("⚠ force, no sandbox"));
 });
 
+test("codex warns only on Windows", () => {
+  fresh();
+  const w = "⚠ Windows sandbox: may not write, or may write outside its folder";
+  const withCodex = () => ({ tools: { codex: { installed: true, capped: false, catalog: true, models: [model("gpt-5.5", "OpenAI")] } } });
+  const codexRow = (platform) => workerMenu({ platform, detectFn: withCodex, env: {} }).find((x) => x.tool === "codex");
+  assert.ok(codexRow("win32").warnings.includes(w));
+  assert.ok(!codexRow("darwin").warnings.includes(w));
+});
+
 test("failed write test marks experimental", () => {
   fresh();
   recordWrite("cursor", "failed");

@@ -31,6 +31,7 @@ export function workerMenu({ platform = process.platform, detectFn = detect, env
       const tiers = TIER_ORDER.filter((tier) => (workers[tool]?.[tier] ?? []).includes(m.id));
       const warnings = [];
       if (tool === "cursor" && platform === "win32") warnings.push("⚠ force, no sandbox");
+      if (tool === "codex" && platform === "win32") warnings.push("⚠ Windows sandbox: may not write, or may write outside its folder");
       if (writeStatus === "failed") warnings.push("experimental: may not write on this machine");
       rows.push({ tool, model: m.id, name: m.name, family: m.family, status: m.status, tiers,
         source: b.source, paidBy: b.paidBy, billing: b.label, sameBudgetAsSession: b.sameBudgetAsSession,

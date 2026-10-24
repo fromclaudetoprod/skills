@@ -2,7 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { workerArgs, WORKER_ASK, parseNeeds } from "../plugins/multi-model-review/skills/multi-model-orchestrate/workers.mjs";
+import { workerArgs, WORKER_ASK, parseNeeds, codexIsolationArgs, configArg } from "../plugins/multi-model-review/skills/multi-model-orchestrate/workers.mjs";
+import { runTool } from "../plugins/multi-model-review/skills/multi-model-review/core.mjs";
 import { tmpDir, runCli, git, makeRepo } from "./helpers.mjs";
 
 const briefFile = path.join(tmpDir("brief"), "brief.md");
@@ -12,15 +13,62 @@ const args = (tool, extra = {}) => workerArgs(tool, { ...base, ...extra }).args;
 const has = (a, ...seq) => a.some((_, i) => seq.every((v, j) => a[i + j] === v));
 const CLI = path.resolve("plugins/multi-model-review/skills/multi-model-orchestrate/orchestrate.mjs");
 
-test("codex writes in its sandbox with MCP off", () => {
-  const a = args("codex");
+test("codex writes in its sandbox with the given isolation args", () => {
+  const iso = ["-c", "mcp_servers.a.enabled=false"];
+  const a = args("codex", { isolation: iso });
   assert.ok(has(a, "-s", "workspace-write"));
-  assert.ok(a.includes("mcp_servers={}"));
+  assert.ok(has(a, "-c", "mcp_servers.a.enabled=false"));
+  assert.ok(!a.includes("mcp_servers={}"));
   assert.ok(!a.includes("read-only"));
-  const r = args("codex", { resume: "abc" });
+  const r = args("codex", { resume: "abc", isolation: iso });
   assert.ok(has(r, "-c", "sandbox_mode=workspace-write"));
-  assert.ok(r.includes("mcp_servers={}"));
+  assert.ok(has(r, "-c", "mcp_servers.a.enabled=false"));
   assert.ok(!r.includes("read-only"));
+  assert.equal(r[r.length - 2], "abc");
+});
+
+const CONFIG = [
+  'model = "gpt-5"',
+  '[mcp_servers.docs]', 'command = "x"',
+  '[mcp_servers.docs.env]', 'K = "v"',
+  '[mcp_servers."a.b"]', 'command = "y"',
+  '[plugins."cua@openai-curated"]', 'enabled = true',
+  '[plugins."other@mkt"]', 'enabled = true',
+  '[plugins."other@mkt".settings]',
+  '[projects."C://x"]',
+].join("\n");
+
+test("codexIsolationArgs disables each server and plugin once, quoting odd names", () => {
+  const a = codexIsolationArgs(CONFIG);
+  assert.ok(a.filter((_, i) => i % 2 === 0).every((x) => x === "-c"));
+  assert.deepEqual(a.filter((_, i) => i % 2 === 1), [
+    "mcp_servers.docs.enabled=false",
+    'mcp_servers."a.b".enabled=false',
+    'plugins."cua@openai-curated".enabled=false',
+    'plugins."other@mkt".enabled=false',
+    'web_search="disabled"',
+  ]);
+});
+
+test("codexIsolationArgs handles a config with no MCP section, a missing file and junk", () => {
+  assert.deepEqual(codexIsolationArgs('model = "x"\n[projects."/a"]\n'), ["-c", 'web_search="disabled"']);
+  assert.deepEqual(codexIsolationArgs(""), ["-c", 'web_search="disabled"']);
+  assert.deepEqual(codexIsolationArgs(undefined), ["-c", 'web_search="disabled"']);
+  assert.deepEqual(codexIsolationArgs('[plugins."a&b"]\n[mcp_servers."x y"]'), ["-c", 'web_search="disabled"']);
+});
+
+test("config values with quotes are escaped for cmd.exe on Windows only", () => {
+  assert.equal(configArg('plugins."x@y".enabled=false', "win32"), '"plugins.\\"x@y\\".enabled=false"');
+  assert.equal(configArg("mcp_servers.a.enabled=false", "win32"), "mcp_servers.a.enabled=false");
+  assert.equal(configArg('plugins."x@y".enabled=false', "linux"), 'plugins."x@y".enabled=false');
+  const w = args("codex", { platform: "win32", isolation: codexIsolationArgs(CONFIG) });
+  assert.ok(w.includes('"plugins.\\"cua@openai-curated\\".enabled=false"'));
+});
+
+test("the escaped config value reaches a Windows program unchanged", { skip: process.platform !== "win32" }, () => {
+  const value = 'plugins."x@y".enabled=false';
+  const r = runTool("node", ["-e", "console.log(process.argv[1])", configArg(value, "win32")]);
+  assert.equal(r.out.trim(), value);
 });
 
 test("claude gets edit tools but no shell or web, and edits are not allowed by path-less rules", () => {
@@ -52,7 +100,7 @@ test("cursor sandbox only off Windows", () => {
 });
 
 test("paths are quoted on Windows only", () => {
-  const wt = "C:\Users\Jane Doe\wt\t1";
+  const wt = "C:\\Users\\Jane Doe\\wt\\t1";
   assert.ok(args("codex", { worktree: wt, platform: "win32" }).includes(`"${wt}"`));
   assert.ok(args("codex", { worktree: wt, platform: "linux" }).includes(wt));
   assert.ok(!args("gemini", { platform: "darwin" }).some((x) => x.includes('"')));

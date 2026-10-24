@@ -104,7 +104,7 @@ test("makeRepo builds a repo on main whose path has a space", () => {
 });
 
 test("quote adds quote characters on Windows only", () => {
-  assert.equal(quote("C:\a b\c", "win32"), '"C:\a b\c"');
+  assert.equal(quote("C:\\a b\\c", "win32"), '"C:\\a b\\c"');
   assert.equal(quote("/a b/c", "linux"), "/a b/c");
   assert.equal(quote("/a b/c", "darwin"), "/a b/c");
 });
