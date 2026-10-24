@@ -72,6 +72,8 @@ claude-opus-5-5."*
   Cursor and Gemini; not Copilot yet. The read-only flags are passed again on every resumed turn.
 - **Usage limits:** plans cap some models (Cursor's Pro plan caps API models such as Gemini per month). A capped model
   is skipped until you clear it; other models on the same tool keep working.
+- **Token usage:** every round records the tokens it used in `usage` (input, cached and output where the tool reports
+  them; Copilot reports none), and `totals` adds them up per review, so you see what a review really costs.
 - **Your data:** each brief goes to that model's company. Claude keeps secrets, keys and customer data out of it.
 - **Cost:** Codex and Claude bill to your own subscriptions. A Claude reviewer runs with only its read tools and none
   of your MCP servers, skills or plugins, about 12k input tokens a turn before the brief. Each Copilot CLI call carries a large built-in system

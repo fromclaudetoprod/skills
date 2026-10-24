@@ -145,13 +145,14 @@ Then decide:
   if it still gives no reason, report the point as unresolved rather than as agreed.
 
 ## 7. Report
-Write `<X>/summary.md`: each round's or exchange's model, tool and verdict, what changed because of it, any point still
-in dispute with both sides stated fairly, and the token totals. Then one message to the user:
+Write `<X>/summary.md`: each round's or exchange's model, tool and verdict, its **tokens in / out** from the `usage`
+field (Codex reports input, cached and output; Copilot reports none), what changed because of it, any point still in
+dispute with both sides stated fairly, and a total-tokens line taken from `totals`. Then one message to the user:
 - The final draft ready to paste, or the verified code findings, most severe first.
-- Panel: one line per round: model, verdict, the one thing it contributed. Dialogue: how many exchanges, why it
-  stopped (agreement, max reached, standoff), and what moved over the exchanges.
+- Panel: one line per round: model, verdict, tokens used, the one thing it contributed. Dialogue: how many exchanges,
+  why it stopped (agreement, max reached, standoff), tokens used, and what moved over the exchanges.
 - Where you and a reviewer still disagree, both sides in a sentence each. The user decides.
-- Tokens: total in / out (and dollars where known).
+- Tokens: total in / out from `totals` (and dollars where known).
 - The exchange folder as one full absolute path.
 
 ## Upkeep
