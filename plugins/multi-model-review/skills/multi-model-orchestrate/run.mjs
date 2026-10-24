@@ -75,8 +75,27 @@ const insideCI = (parent, child) => {
   const rel = path.relative(parent, child);
   return rel === "" || (rel !== ".." && !rel.startsWith(".." + path.sep) && !path.isAbsolute(rel));
 };
-export function toolConfigDirHit(rootDir, home = os.homedir()) {
-  return TOOL_CONFIG_DIRS.find((d) => insideCI(path.resolve(home, d), path.resolve(rootDir))) ?? null;
+// Env vars that relocate a tool's config folder; a run root inside one is refused the same way.
+export const TOOL_CONFIG_ENV = ["CLAUDE_CONFIG_DIR", "CODEX_HOME"];
+// The real path of p: its deepest existing ancestor is realpath'ed (this resolves links, junctions and 8.3 short names)
+// and the not-yet-existing rest is appended unchanged.
+function realish(p) {
+  let cur = path.resolve(p);
+  const rest = [];
+  for (;;) {
+    try { return path.join(fs.realpathSync.native(cur), ...rest.reverse()); } catch { /* not there yet */ }
+    const up = path.dirname(cur);
+    if (up === cur) return path.resolve(p);
+    rest.push(path.basename(cur));
+    cur = up;
+  }
+}
+// Returns the name of the config folder the root is inside (".claude" ...) or the env var that points at it, else null.
+export function toolConfigDirHit(rootDir, home = os.homedir(), env = process.env) {
+  const root = realish(rootDir);
+  const hit = (dir) => insideCI(realish(dir), root) || insideCI(path.resolve(dir), path.resolve(rootDir));
+  return TOOL_CONFIG_DIRS.find((d) => hit(path.resolve(home, d)))
+    ?? TOOL_CONFIG_ENV.find((v) => env[v] && hit(env[v])) ?? null;
 }
 
 export function startRun({ repo, topic, root = runRoot(), date = today(), allowSubmodules = false }) {
@@ -96,7 +115,7 @@ export function startRun({ repo, topic, root = runRoot(), date = today(), allowS
   if (inside(repoDir, rootDir)) throw new RunRefused(`the run folder must be outside the repository (MMO_RUN_ROOT is inside it): ${rootDir}`);
 
   const cfg = toolConfigDirHit(rootDir);
-  if (cfg) throw new RunRefused(`the run folder must not be inside ~/${cfg} (${rootDir}): coding tools treat their own config folder as sensitive and refuse worker writes there. Use the default (~/orchestrate-runs) or set MMO_RUN_ROOT elsewhere`);
+  if (cfg) throw new RunRefused(`the run folder must not be inside ${cfg.startsWith(".") ? `~/${cfg}` : `$${cfg}`} (${rootDir}): coding tools treat their own config folder as sensitive and refuse worker writes there. Use the default (~/orchestrate-runs) or set MMO_RUN_ROOT elsewhere`);
 
   const userBranch = branch.out.trim();
   const base = git(repoDir, "rev-parse", "HEAD").trim();

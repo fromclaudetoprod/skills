@@ -196,6 +196,21 @@ test("refuses a run root inside ~/.claude, ~/.codex, ~/.cursor or ~/.gemini (any
   if (process.platform === "win32") assert.equal(toolConfigDirHit(path.join(home, ".CLAUDE", "x"), home), ".claude");
 });
 
+test("toolConfigDirHit resolves links and short names of the deepest existing ancestor, and honours CLAUDE_CONFIG_DIR and CODEX_HOME", async (t) => {
+  const { toolConfigDirHit } = await import("../plugins/multi-model-review/skills/multi-model-orchestrate/run.mjs");
+  const home = tmpDir("home2");
+  const cfg = tmpDir("cfg"), codex = tmpDir("codexhome");
+  assert.equal(toolConfigDirHit(path.join(cfg, "runs", "x"), home, { CLAUDE_CONFIG_DIR: cfg }), "CLAUDE_CONFIG_DIR");
+  assert.equal(toolConfigDirHit(path.join(codex, "a"), home, { CODEX_HOME: codex }), "CODEX_HOME");
+  assert.equal(toolConfigDirHit(path.join(cfg, "runs"), home, {}), null);
+  assert.equal(toolConfigDirHit(path.join(cfg, "runs"), home, { CLAUDE_CONFIG_DIR: "" }), null);
+  // a link that leads into ~/.claude, with the run root not yet created below it
+  fs.mkdirSync(path.join(home, ".claude"));
+  const link = path.join(tmpDir("lnk"), "alias");
+  try { fs.symlinkSync(path.join(home, ".claude"), link, "junction"); } catch { t.skip("cannot create links here"); return; }
+  assert.equal(toolConfigDirHit(path.join(link, "orchestrate", "run1"), home, {}), ".claude");
+});
+
 test("start refuses a run root under ~/.claude with exit 7 and a reason", () => {
   const { repo } = setup();
   const root = path.join(os.homedir(), ".claude", "orchestrate-test-never-created");
