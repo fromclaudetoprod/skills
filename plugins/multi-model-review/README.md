@@ -134,7 +134,7 @@ folder changes, Claude detects it and stops the run; that is detection, not prev
 - **Codex write mode:** unsafe on Windows, so Codex now uses **patch mode** there. In the "elevated" Windows
   sandbox Codex could not write even inside its worktree. In the "unelevated" sandbox its patch tool wrote a file
   outside the worktree. Codex as a read-only reviewer is not affected.
-- **Patch mode (Codex and Cursor on Windows):** the worker runs read-only and answers with whole files (models write unreliable diffs); `work` builds the
+- **Patch mode (Codex and Cursor on Windows):** the worker runs read-only and answers with whole files, each between `<<<FILE path=... code=CODE>>>` and `<<<END CODE>>>` lines with a random code per call (models write unreliable diffs, and Markdown fences are ambiguous); `work` builds the
   exact diff, keeps CRLF/LF, checks it (no paths outside the folder, none inside `.git`, none under a symlink, 1 MB cap) and applies it with git. Tested live on Windows
   (2026-10-24): Codex (gpt-6-luna) applied its diff in the worktree, a resumed session applied a follow-up diff, and the
   outside-write probe was not written; Cursor (grok-4.7-medium, `--mode ask`, no `--force`) applied its diff and
@@ -162,8 +162,7 @@ Limits to know about:
   `--mode write`, the menu warns `⚠ force, no sandbox`, and your Claude Code permission settings may ask you to approve
   a worker that edits files with nothing confining it.
 - **Copilot sessions can't be resumed**, and it reports no token usage.
-- **Codex on Windows** runs in patch mode and cannot start a shell, so Claude runs its commands. A diff that is
-  missing or does not apply is a failed attempt (exit 9) and goes back to the worker as a fix round.
+- **Codex on Windows** runs in patch mode and cannot start a shell, so Claude runs its commands. A reply with no valid file blocks, or one that does not apply, is a failed attempt (exit 9) and goes back to the worker as a fix round.
 - If a tool exits cleanly but changes no files when it should have, Claude records that. The model then shows
   `experimental: may not write on this machine` in the menu until a later run succeeds.
 - If the repository has a rule against committing (in `CLAUDE.md` or `AGENTS.md`), Claude lands the work as
@@ -176,7 +175,7 @@ you edit your own folder on purpose during a run, Claude shows you the change an
 `rebaseline` and carry on.
 
 Run folders (briefs, replies, diffs, test logs, token use) are in `~/orchestrate-runs/<date>-<topic>/` (not under `~/.claude`: Claude Code refuses worker writes there). Set
-`MMO_RUN_ROOT` to move them. To pick up an interrupted run, say "continue the orchestrate run".
+`MMO_RUN_ROOT` to move them (a root inside `~/.claude`, `~/.codex`, `~/.cursor`, `~/.gemini`, `CLAUDE_CONFIG_DIR` or `CODEX_HOME`, or reached through a link into one, is refused). To pick up an interrupted run, say "continue the orchestrate run".
 
 ## Where things go
 | What | Where |

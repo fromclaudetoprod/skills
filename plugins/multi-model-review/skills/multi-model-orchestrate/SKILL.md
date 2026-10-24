@@ -127,7 +127,7 @@ Worker naming is `<model display name or id> via <Tool name CLI>`, e.g. `Grok 4.
    `mode`, `usage` and running `totals` (also in `<run>/replies/usage.jsonl`). `--mode write|patch` defaults to `patch`
    for codex and cursor on Windows and `write` elsewhere (see `tools.md`); the output also lists `isolationSkipped`
    (Codex MCP servers or plugins that could not be switched off). In **patch mode** the worker cannot edit files: it
-   replies with the complete new contents of each file it changes, `work` builds the exact diff, validates it and applies it in the worktree (`patchApplied`, `patchError`,
+   replies with the complete new contents of each file it changes between `<<<FILE path=... code=CODE>>>` and `<<<END CODE>>>` lines (CODE is random per call; `<<<DELETE path=... code=CODE>>>` deletes), `work` builds the exact diff, validates it and applies it in the worktree (`patchApplied`, `patchError`,
    and the diff saved beside the reply as `<out>.patch`). Tell patch-mode workers the task is whole files in the reply.
 4. **Exit codes of `work`:** 0 ok · 3 model unavailable: tell the user, offer the next row · 4 capped:
    `task --set status=stalled --set note="<tool> out of usage"` and offer another model · 5 something changed in the
