@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { workerArgs, WORKER_ASK, WORKER_PATCH_ASK, parseNeeds, codexIsolationArgs, codexIsolation, configArg, defaultMode, extractPatch, validatePatch, symlinkAmong } from "../plugins/multi-model-review/skills/multi-model-orchestrate/workers.mjs";
+import { workerArgs, WORKER_ASK, WORKER_PATCH_ASK, parseNeeds, codexIsolationArgs, codexIsolation, configArg, defaultMode, extractPatch, validatePatch, symlinkAmong, extractFiles, buildPatch, checkPathSafe } from "../plugins/multi-model-review/skills/multi-model-orchestrate/workers.mjs";
 import { runTool } from "../plugins/multi-model-review/skills/multi-model-review/core.mjs";
 import { spawnSync } from "node:child_process";
 import { tmpDir, runCli, git, makeRepo } from "./helpers.mjs";
@@ -127,7 +127,7 @@ test("codex and claude get the ask, then the brief, on stdin in both modes", () 
   for (const tool of ["codex", "claude"]) {
     const wr = workerArgs(tool, base).input, pa = workerArgs(tool, { ...base, mode: "patch" }).input;
     assert.ok(wr.startsWith(WORKER_ASK(null)) && wr.includes("Do not commit") && wr.includes("NEEDS:"));
-    assert.ok(pa.startsWith(WORKER_PATCH_ASK(null)) && pa.includes("```diff") && pa.includes("cannot edit files"));
+    assert.ok(pa.startsWith(WORKER_PATCH_ASK(null)) && pa.includes("```file path=") && pa.includes("cannot edit files"));
     for (const t of [wr, pa]) assert.ok(t.includes("\n\n--- TASK BRIEF ---\ndo the thing") && !t.includes(briefFile));
   }
   assert.ok(WORKER_ASK("/b.md").includes("/b.md"));
@@ -241,9 +241,13 @@ test("patch-mode args are read-only: no --force, workspace-write or auto_edit", 
   assert.ok(has(args("codex", { mode: "patch", isolation: ["-c", "mcp_servers.a.enabled=false"] }), "-c", "mcp_servers.a.enabled=false"));
 });
 
-test("patch ask names the brief and asks for one diff block and NEEDS lines", () => {
-  const a = WORKER_PATCH_ASK("/b/brief.md");
-  assert.ok(a.includes("/b/brief.md") && a.includes("```diff") && a.includes("NEEDS:") && a.includes("/dev/null"));
+test("patch ask names the brief and asks for whole files, DELETE lines and NEEDS lines, never a diff", () => {
+  for (const a of [WORKER_PATCH_ASK("/b/brief.md"), WORKER_PATCH_ASK(null)]) {
+    assert.ok(a.includes("```file path=") && a.includes("DELETE:") && a.includes("NEEDS:") && a.includes("never abbreviate") && a.includes("four backticks"));
+    assert.ok(!a.includes("```diff") && !a.includes("/dev/null"));
+  }
+  assert.ok(WORKER_PATCH_ASK("/b/brief.md").includes("/b/brief.md"));
+  assert.ok(WORKER_PATCH_ASK(null).includes("--- TASK BRIEF ---"));
 });
 
 const D = (p, body = "+hi\n") => `diff --git a/${p} b/${p}\nnew file mode 100644\n--- /dev/null\n+++ b/${p}\n@@ -0,0 +1 @@\n${body}`;
@@ -307,11 +311,12 @@ if (a[0] === "--version") process.exit(0);
 if (process.env.STUB_ARGV) fs.appendFileSync(process.env.STUB_ARGV, a.join(" ") + "\n");
 const reply = fs.readFileSync(process.env.STUB_REPLY_FILE, "utf8");
 if (process.argv[1].includes("cursor")) {
+  if (!a.join(" ").includes("file path=<path")) { console.log(JSON.stringify({ type: "result", result: "I am read-only and saw no file ask." })); process.exit(0); }
   console.log(JSON.stringify({ type: "result", result: reply, usage: { inputTokens: 5, outputTokens: 2 } }));
 } else {
   let input = "";
   try { input = fs.readFileSync(0, "utf8"); } catch {}
-  const sawAsk = input.includes("cannot edit files") && input.includes("--- TASK BRIEF ---");
+  const sawAsk = input.includes("file path=<path") && input.includes("--- TASK BRIEF ---");
   fs.writeFileSync(a[a.indexOf("-o") + 1].replace(/^"|"$/g, ""), sawAsk ? reply : "I tried to edit files but I am read-only.\n");
   console.log(JSON.stringify({ type: "turn.completed", usage: { input_tokens: 5, cached_input_tokens: 0, output_tokens: 2 } }));
 }
@@ -382,7 +387,7 @@ test("patch mode: a reply with no diff block exits 9", () => {
   const r = run("I changed the file, trust me.\n");
   assert.equal(r.code, 9);
   assert.equal(r.json.patchApplied, false);
-  assert.match(r.json.patchError, /no ```diff block/);
+  assert.match(r.json.patchError, /no ```file block/);
 });
 
 test("patch mode: a diff that does not apply exits 9 with git's error", () => {
@@ -492,4 +497,203 @@ test("patch mode: a symlink patch is refused with exit 9 and nothing is created"
   assert.equal(r.code, 9);
   assert.match(r.json.patchError, /not allowed/);
   assert.ok(!fs.existsSync(path.join(wt, "ln")));
+});
+
+// ---- patch mode: whole-file replies ----
+const FB = (p, content, ticks = "```") => `${ticks}file path=${p}\n${content}${ticks}\n`;
+const wfReply = (...blocks) => "Here is the change.\n" + blocks.join("\n") + "NEEDS: npm i x because y\n";
+const commitFile = (wt, rel, bytes) => {
+  fs.mkdirSync(path.dirname(path.join(wt, rel)), { recursive: true });
+  fs.writeFileSync(path.join(wt, rel), bytes);
+  git(wt, "add", rel); git(wt, "commit", "-q", "-m", `add ${rel}`);
+};
+const readBytes = (wt, rel) => fs.readFileSync(path.join(wt, rel), "latin1");
+
+test("extractFiles: blocks, DELETE lines, exact content, 4-backtick fences", () => {
+  assert.equal(extractFiles("nothing here"), null);
+  assert.equal(extractFiles("```diff\n" + D("a.txt") + "```\n"), null);
+  const r = extractFiles("hi\n```file path=src/a.ts\nline1\n\nline3\n```\nDELETE: old.txt\n````file path=doc.md\n```sh\nx\n```\n````\n```file path=empty.txt\n```\n");
+  assert.deepEqual(r, { files: [{ path: "src/a.ts", content: "line1\n\nline3\n" }, { path: "doc.md", content: "```sh\nx\n```\n" }, { path: "empty.txt", content: "" }], deletes: ["old.txt"] });
+  assert.deepEqual(extractFiles("```file path=a\r\nx\r\n```\r\n").files, [{ path: "a", content: "x\n" }]);
+});
+
+test("extractFiles: the closing fence must be at column 0 and at least as long as the opening one", () => {
+  assert.deepEqual(extractFiles("```file path=a\n  ```\nx\n```\n").files[0].content, "  ```\nx\n");
+  assert.deepEqual(extractFiles("````file path=a\n```\nx\n````\n").files[0].content, "```\nx\n");
+  assert.throws(() => extractFiles("```file path=a\nno close\n"), /never closed/);
+});
+
+test("extractFiles: a duplicate path is an error", () => {
+  assert.throws(() => extractFiles(FB("a", "1\n") + FB("a", "2\n")), /twice: a/);
+  assert.throws(() => extractFiles(FB("a", "1\n") + "DELETE: a\n"), /twice: a/);
+});
+
+test("buildPatch: existing CRLF file keeps CRLF, LF file stays LF, no-newline-at-end handled both ways", () => {
+  const wt = tmpDir("bp");
+  git(wt, "init", "-q");
+  fs.writeFileSync(path.join(wt, "crlf.txt"), "a\r\nb\r\n");
+  fs.writeFileSync(path.join(wt, "lf.txt"), "a\nb\n");
+  fs.writeFileSync(path.join(wt, "nonl.txt"), "a\nb");
+  const p = buildPatch(wt, [{ path: "crlf.txt", content: "a\nB\n" }, { path: "lf.txt", content: "a\r\nB\n" }, { path: "nonl.txt", content: "a\nb\n" }]);
+  assert.ok(p.includes("@@ -1,2 +1,2 @@\n-a\r\n-b\r\n+a\r\n+B\r\n"));
+  assert.ok(p.includes("@@ -1,2 +1,2 @@\n-a\n-b\n+a\n+B\n"));
+  assert.ok(p.includes("-a\n-b\n\\ No newline at end of file\n+a\n+b\n"));
+  fs.writeFileSync(path.join(wt, "nl.txt"), "a\nb\n");
+  assert.ok(buildPatch(wt, [{ path: "nl.txt", content: "a\nb" }]).endsWith("-a\n-b\n+a\n+b\n\\ No newline at end of file\n"));
+});
+
+test("buildPatch: unchanged files are skipped, new and deleted files get the right headers", () => {
+  const wt = tmpDir("bp2");
+  git(wt, "init", "-q");
+  fs.writeFileSync(path.join(wt, "same.txt"), "a\r\nb\r\n");
+  fs.writeFileSync(path.join(wt, "gone.txt"), "x\ny\n");
+  fs.writeFileSync(path.join(wt, "empty.txt"), "");
+  assert.equal(buildPatch(wt, [{ path: "same.txt", content: "a\nb\n" }]), "");
+  assert.equal(buildPatch(wt, [{ path: "new/n.txt", content: "hi\nthere" }]),
+    "diff --git a/new/n.txt b/new/n.txt\nnew file mode 100644\n--- /dev/null\n+++ b/new/n.txt\n@@ -0,0 +1,2 @@\n+hi\n+there\n\\ No newline at end of file\n");
+  assert.equal(buildPatch(wt, [], ["gone.txt"]), "diff --git a/gone.txt b/gone.txt\ndeleted file mode 100644\n--- a/gone.txt\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-x\n-y\n");
+  assert.equal(buildPatch(wt, [{ path: "empty.txt", content: "z\n" }]), "diff --git a/empty.txt b/empty.txt\n--- a/empty.txt\n+++ b/empty.txt\n@@ -0,0 +1,1 @@\n+z\n");
+  assert.throws(() => buildPatch(wt, [], ["missing.txt"]), /does not exist/);
+});
+
+test("buildPatch: bad paths and big files are refused before anything is read", () => {
+  const wt = tmpDir("bp3");
+  git(wt, "init", "-q");
+  const bad = (p, re) => assert.throws(() => buildPatch(wt, [{ path: p, content: "x\n" }]), re);
+  bad("../x", /leaves the folder/);
+  bad("/etc/x", /absolute path/);
+  bad("C:/x", /absolute path/);
+  bad(".git/config", /\.git/);
+  bad("a/.GIT/hooks/x", /\.git/);
+  bad("a\\b", /backslash/);
+  bad("", /bad file path/);
+  bad("a//b", /bad file path/);
+  bad("dir/", /bad file path/);
+  bad("x\ny", /bad file path/);
+  assert.throws(() => buildPatch(wt, [{ path: "big.txt", content: "x".repeat(1024 * 1024 + 1) }]), /larger than 1 MB/);
+  fs.writeFileSync(path.join(wt, "huge.txt"), "y".repeat(1024 * 1024 + 1));
+  assert.throws(() => buildPatch(wt, [{ path: "huge.txt", content: "z\n" }]), /larger than 1 MB/);
+  fs.writeFileSync(path.join(wt, "bin.dat"), Buffer.from([0x61, 0, 0x62]));
+  assert.throws(() => buildPatch(wt, [{ path: "bin.dat", content: "z\n" }]), /not a UTF-8/);
+});
+
+test("checkPathSafe: plain and missing paths pass; symlinked parents and targets are refused", (t) => {
+  const root = tmpDir("cps");
+  const wt = path.join(root, "wt"), outside = path.join(root, "outside");
+  fs.mkdirSync(path.join(wt, "src"), { recursive: true });
+  fs.mkdirSync(outside);
+  fs.writeFileSync(path.join(wt, "src", "a.txt"), "x");
+  assert.equal(checkPathSafe(wt, "src/a.txt"), null);
+  assert.equal(checkPathSafe(wt, "new/deeper/b.txt"), null);
+  assert.match(checkPathSafe(wt, "src/a.txt/b.txt"), /not a folder/);
+  assert.match(checkPathSafe(wt, "src"), /is a folder/);
+  try { fs.symlinkSync(outside, path.join(wt, "link"), "junction"); } catch { t.skip("cannot create links here"); return; }
+  assert.match(checkPathSafe(wt, "link/x.txt"), /link is a symlink/);
+  assert.match(checkPathSafe(wt, "link"), /link is a symlink/);
+  assert.throws(() => buildPatch(wt, [{ path: "link/x.txt", content: "x\n" }]), /symlink/);
+  assert.throws(() => buildPatch(wt, [], ["link/x.txt"]), /symlink/);
+});
+
+test("checkPathSafe: a symlinked file target is refused", (t) => {
+  const wt = tmpDir("cps2");
+  fs.writeFileSync(path.join(wt, "real.txt"), "x");
+  try { fs.symlinkSync(path.join(wt, "real.txt"), path.join(wt, "ln.txt"), "file"); } catch { t.skip("cannot create file symlinks here"); return; }
+  assert.match(checkPathSafe(wt, "ln.txt"), /ln.txt is a symlink/);
+  assert.throws(() => buildPatch(wt, [{ path: "ln.txt", content: "y\n" }]), /symlink/);
+});
+
+test("whole-file patch mode: a CRLF file (autocrlf=true) is edited and keeps CRLF", () => {
+  const { repo, wt, outDir, run } = setupPatch();
+  git(repo, "config", "core.autocrlf", "true");
+  commitFile(wt, "win.txt", "one\r\ntwo\r\nthree\r\n");
+  const r = run(wfReply(FB("win.txt", "one\nTWO\nthree\nfour\n")));
+  assert.equal(r.code, 0, r.err + r.out);
+  assert.equal(r.json.patchApplied, true);
+  assert.equal(readBytes(wt, "win.txt"), "one\r\nTWO\r\nthree\r\nfour\r\n");
+  assert.deepEqual(r.json.needs, ["npm i x because y"]);
+  assert.ok(fs.readFileSync(path.join(outDir, "r1.patch"), "utf8").startsWith("diff --git a/win.txt b/win.txt\n"));
+  assert.match(fs.readFileSync(path.join(outDir, "r1.md"), "utf8"), /```file path=win.txt/);
+});
+
+for (const tool of ["codex", "cursor"]) {
+  test(`whole-file patch mode (${tool}): LF file stays LF, new and nested files are created, DELETE works`, () => {
+    const { repo, wt, run } = setupPatch();
+    git(repo, "config", "core.autocrlf", "true"); // git must not turn an LF file into CRLF
+    commitFile(wt, "lf.txt", "a\nb\n");
+    commitFile(wt, "gone.txt", "bye\n");
+    const r = run(wfReply(FB("lf.txt", "a\nB\n"), FB("deep/er/new.txt", "fresh\n"), "DELETE: gone.txt\n"), { tool });
+    assert.equal(r.code, 0, r.err + r.out);
+    assert.equal(readBytes(wt, "lf.txt"), "a\nB\n");
+    assert.equal(readBytes(wt, "deep/er/new.txt").replace(/\r\n/g, "\n"), "fresh\n");
+    assert.ok(!fs.existsSync(path.join(wt, "gone.txt")));
+    for (const c of ["lf.txt", "gone.txt"]) assert.ok(r.json.changedFiles.includes(c), c);
+  });
+}
+
+test("whole-file patch mode: a file that contains a ``` line, wrapped in a four-backtick fence, applies exactly", () => {
+  const { wt, run } = setupPatch();
+  const doc = "# Title\n\n```sh\nnpm test\n```\n\n````\nnested\n````\n";
+  commitFile(wt, "doc.md", "old\n");
+  const r = run(wfReply(FB("doc.md", doc.replace("````\nnested\n````", "text"), "````")));
+  assert.equal(r.code, 0, r.err + r.out);
+  assert.equal(readBytes(wt, "doc.md"), "# Title\n\n```sh\nnpm test\n```\n\ntext\n");
+});
+
+test("whole-file patch mode: unsafe paths exit 9 and write nothing", () => {
+  for (const p of ["../x.txt", "/abs/x.txt", ".git/config"]) {
+    const { root, wt, run } = setupPatch();
+    const r = run(wfReply(FB(p, "x\n")));
+    assert.equal(r.code, 9, p);
+    assert.equal(r.json.patchApplied, false);
+    assert.match(r.json.patchError, /patch rejected/);
+    assert.ok(!fs.existsSync(path.join(root, "x.txt")) && !fs.existsSync(path.join(path.dirname(wt), "x.txt")));
+    assert.deepEqual(r.json.changedFiles, []);
+  }
+  const { run } = setupPatch();
+  assert.equal(run(wfReply("DELETE: ../x.txt\n")).code, 9);
+});
+
+test("whole-file patch mode: a path under a symlinked folder is refused with exit 9", (t) => {
+  const { root, wt, run } = setupPatch();
+  const outside = path.join(root, "outside");
+  fs.mkdirSync(outside);
+  try { fs.symlinkSync(outside, path.join(wt, "link"), "junction"); } catch { t.skip("cannot create links here"); return; }
+  const r = run(wfReply(FB("link/x.txt", "x\n")));
+  assert.equal(r.code, 9);
+  assert.match(r.json.patchError, /symlink/);
+  assert.ok(!fs.existsSync(path.join(outside, "x.txt")));
+});
+
+test("whole-file patch mode: no file blocks and no diff exits 9; duplicates and identical files exit 9", () => {
+  const { wt, run } = setupPatch();
+  let r = run("I changed everything, trust me.\n");
+  assert.equal(r.code, 9);
+  assert.match(r.json.patchError, /no ```file block/);
+  r = run(wfReply(FB("a.txt", "1\n"), FB("a.txt", "2\n")));
+  assert.equal(r.code, 9);
+  assert.match(r.json.patchError, /twice: a\.txt/);
+  assert.ok(!fs.existsSync(path.join(wt, "a.txt")));
+  r = run(wfReply(FB("calc.py", "def add(a, b):\n    return a + b\n")));
+  assert.equal(r.code, 9);
+  assert.match(r.json.patchError, /nothing to change/);
+  r = run("```file path=a.txt\nnever closed\n");
+  assert.equal(r.code, 9);
+  assert.match(r.json.patchError, /never closed/);
+});
+
+test("whole-file patch mode: a ```diff reply still works (fallback), and file blocks win when both are present", () => {
+  const { wt, run } = setupPatch();
+  let r = run(fence(D("viadiff.txt")));
+  assert.equal(r.code, 0, r.err + r.out);
+  assert.equal(readBytes(wt, "viadiff.txt").replace(/\r\n/g, "\n"), "hi\n");
+  r = run(fence(D("other.txt")) + FB("viafile.txt", "f\n"));
+  assert.equal(r.code, 0, r.err + r.out);
+  assert.ok(fs.existsSync(path.join(wt, "viafile.txt")) && !fs.existsSync(path.join(wt, "other.txt")));
+});
+
+test("whole-file patch mode: the stub answers with files only when the ask names the file format", () => {
+  const { run, argvFile } = setupPatch();
+  const r = run(wfReply(FB("seen.txt", "s\n")), { tool: "cursor" });
+  assert.equal(r.code, 0, r.err + r.out);
+  assert.ok(fs.readFileSync(argvFile, "utf8").includes("file path=<path"));
 });

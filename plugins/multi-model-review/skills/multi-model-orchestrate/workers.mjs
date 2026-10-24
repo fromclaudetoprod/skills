@@ -28,7 +28,7 @@ export const PATCH_TOOLS = ["codex", "cursor", "gemini"];
 export const defaultMode = (tool, platform = process.platform) => (platform === "win32" && (tool === "codex" || tool === "cursor") ? "patch" : "write");
 
 export const WORKER_PATCH_ASK = (briefPath) =>
-  `${briefLead(briefPath)} and do what it asks, but you cannot edit files or run commands. Produce the complete change as ONE unified diff in git format (\`diff --git a/<path> b/<path>\`, paths relative to the current folder, \`--- /dev/null\` for new files) inside a single \`\`\`diff fenced block at the end of your reply. If the folder already contains your earlier change, diff against the current files. If you need a command run, add a line \`NEEDS: <command> because <reason>\` after the block.`;
+  `${briefLead(briefPath)} and do what it asks, but you cannot edit files or run commands. Return your change as COMPLETE FILES, never as a diff: for every file you create or change, write its entire new contents inside a fenced block whose first line is \`\`\`file path=<path relative to the current folder> (for example \`\`\`file path=src/a.ts), with the closing fence alone at the start of a line. If the file itself contains a \`\`\` line, open and close the block with four backticks instead. The file is replaced exactly as you give it, so never abbreviate it or write "rest unchanged". To delete a file, write a line \`DELETE: <path>\` outside any block. If the folder already contains your earlier change, base the file on its current contents. If you need a command run, add a line \`NEEDS: <command> because <reason>\` after the blocks.`;
 
 // The LAST ```diff block of a reply, or null. The closing fence is at column 0: every content line of a diff starts
 // with ' ', '+', '-' or '\', so a fence at column 0 can only be the real close.
@@ -37,6 +37,120 @@ export function extractPatch(text) {
   if (!blocks.length) return null;
   const body = blocks[blocks.length - 1][1].replace(/\r\n/g, "\n");
   return body.trim() ? body + "\n" : null;
+}
+
+// Whole-file replies: ```file path=<p> blocks (closing fence at column 0, at least as long as the opening one, so a
+// file that contains ``` can be wrapped in ````) plus `DELETE: <p>` lines. Returns null when the reply has neither.
+// Throws on an unclosed block or a path given twice. Content is the exact text between the fences.
+export function extractFiles(text) {
+  const lines = String(text ?? "").split(/\r?\n/);
+  const files = [], deletes = [], seen = new Set();
+  const note = (p) => {
+    if (seen.has(p)) throw new Error(`path given twice: ${p}`);
+    seen.add(p);
+  };
+  for (let i = 0; i < lines.length; i++) {
+    const open = lines[i].match(/^(`{3,})file[ \t]+path=[ \t]*(.*?)[ \t]*$/);
+    if (open) {
+      const p = open[2].replace(/^(["'])(.*)\1$/, "$2");
+      const body = [];
+      let closed = false;
+      for (i++; i < lines.length; i++) {
+        const c = lines[i].match(/^(`{3,})[ \t]*$/);
+        if (c && c[1].length >= open[1].length) { closed = true; break; }
+        body.push(lines[i]);
+      }
+      if (!closed) throw new Error(`the file block for ${p} is never closed`);
+      note(p);
+      files.push({ path: p, content: body.length ? body.join("\n") + "\n" : "" });
+      continue;
+    }
+    const del = lines[i].match(/^DELETE:[ \t]*(\S.*?)[ \t]*$/);
+    if (del) { const p = del[1].replace(/^`(.*)`$/, "$1"); note(p); deletes.push(p); }
+  }
+  return files.length || deletes.length ? { files, deletes } : null;
+}
+
+const MAX_FILE = 1024 * 1024;
+
+// Why a worktree-relative path must not be read or written, or null. Looks at the disk: a symlink (or junction)
+// anywhere along the path, or a parent that resolves outside the worktree. Missing parts are fine (new files).
+export function checkPathSafe(worktree, rel) {
+  const root = fs.realpathSync(worktree);
+  const segs = rel.split("/");
+  let cur = worktree;
+  for (let i = 0; i < segs.length; i++) {
+    cur = path.join(cur, segs[i]);
+    let st;
+    try { st = fs.lstatSync(cur); } catch { return null; }
+    const here = segs.slice(0, i + 1).join("/");
+    if (st.isSymbolicLink()) return `${here} is a symlink`;
+    if (i < segs.length - 1) {
+      if (!st.isDirectory()) return `${here} is not a folder`;
+      const rp = path.relative(root, fs.realpathSync(cur));
+      if (rp.startsWith("..") || path.isAbsolute(rp)) return `${here} resolves outside the worktree`;
+    } else if (st.isDirectory()) return `${here} is a folder`;
+  }
+  return null;
+}
+
+// Splits text into lines that keep their own terminator; the last piece may have none.
+const pieces = (t) => t.match(/[^\n]*\n|[^\n]+$/g) ?? [];
+
+// Synthesizes an exact git patch that turns the worktree's current files into the worker's whole files: one hunk per
+// file, every old line removed and every new line added. Existing files keep their line endings (CRLF if they contain
+// any CRLF); new files are written with LF (git normalizes them under core.autocrlf). Throws Error(reason) on any
+// refusal, before reading or writing anything it should not.
+export function buildPatch(worktree, files, deletes = []) {
+  const out = [];
+  const wanted = [...files.map((f) => ({ ...f, del: false })), ...deletes.map((p) => ({ path: p, del: true }))];
+  for (const w of wanted) {
+    const p = w.path.replace(/^(\.\/)+/, "");
+    const badShape = new Error(`bad file path: ${JSON.stringify(w.path)}`);
+    if (!p || /[\x00-\x1f"]/.test(p) || p !== p.trim()) throw badShape;
+    const v = validatePatch(`diff --git a/${p} b/${p}\n`);
+    if (!v.ok) throw new Error(v.reason);
+    if (p.endsWith("/") || p.split("/").some((s) => s === "" || s === ".")) throw badShape;
+    const unsafe = checkPathSafe(worktree, p);
+    if (unsafe) throw new Error(`${p}: ${unsafe}`);
+    const abs = path.join(worktree, p);
+    let old = null, oldBytes = null, exec = false;
+    if (fs.existsSync(abs)) {
+      const st = fs.statSync(abs);
+      if (st.size > MAX_FILE) throw new Error(`${p}: larger than 1 MB`);
+      oldBytes = fs.readFileSync(abs);
+      old = oldBytes.toString("utf8");
+      if (!Buffer.from(old, "utf8").equals(oldBytes) || old.includes("\0")) throw new Error(`${p}: not a UTF-8 text file`);
+      exec = (st.mode & 0o111) !== 0;
+    }
+    if (w.del) {
+      if (old === null) throw new Error(`${p}: cannot delete, the file does not exist`);
+      out.push(...header(p, `deleted file mode ${exec ? "100755" : "100644"}`));
+      if (old) hunk(out, `--- a/${p}`, "+++ /dev/null", pieces(old), []);
+      continue;
+    }
+    if (Buffer.byteLength(w.content) > MAX_FILE) throw new Error(`${p}: larger than 1 MB`);
+    let next = w.content.replace(/\r\n/g, "\n");
+    if (old !== null && old.includes("\r\n")) next = next.replace(/\n/g, "\r\n");
+    if (next === old) continue;
+    if (old === null) {
+      out.push(...header(p, "new file mode 100644"));
+      if (next) hunk(out, "--- /dev/null", `+++ b/${p}`, [], pieces(next));
+    } else {
+      out.push(...header(p));
+      hunk(out, `--- a/${p}`, `+++ b/${p}`, pieces(old), pieces(next));
+    }
+  }
+  return out.join("");
+}
+
+const header = (p, mode) => [`diff --git a/${p} b/${p}\n`, ...(mode ? [`${mode}\n`] : [])];
+function hunk(out, from, to, oldLines, newLines) {
+  const range = (sign, n) => `${sign}${n ? 1 : 0},${n}`;
+  out.push(`${from}\n`, `${to}\n`, `@@ ${range("-", oldLines.length)} ${range("+", newLines.length)} @@\n`);
+  for (const [sign, ls] of [["-", oldLines], ["+", newLines]]) {
+    for (const l of ls) out.push(l.endsWith("\n") ? sign + l : `${sign}${l}\n\\ No newline at end of file\n`);
+  }
 }
 
 const ALLOWED_MODES = [0o100644, 0o100755];
@@ -83,11 +197,13 @@ export function validatePatch(patch) {
 }
 
 // Validate, then check and apply inside the worktree. Returns { applied, error }.
-export function applyPatch(worktree, patch, patchFile) {
+// exact: the patch is byte-exact against the files on disk (we built it), so git must not convert line endings
+// (core.autocrlf=true would turn an LF file into CRLF on write).
+export function applyPatch(worktree, patch, patchFile, { exact = false } = {}) {
   const v = validatePatch(patch);
   if (!v.ok) return { applied: false, error: `patch rejected: ${v.reason}` };
   fs.writeFileSync(patchFile, patch);
-  const opts = ["-c", "core.protectNTFS=true", "-c", "core.protectHFS=true"];
+  const opts = ["-c", "core.protectNTFS=true", "-c", "core.protectHFS=true", ...(exact ? ["-c", "core.autocrlf=false"] : [])];
   const tail = ["--whitespace=nowarn", patchFile];
   const gitErr = (r) => (r.err || r.spawnError?.message || "").trim();
   const check = runGit(worktree, [...opts, "apply", "--check", ...tail]);
@@ -280,9 +396,15 @@ export function work(args) {
     if (outsideChanged) error = "not attempted: something changed outside the worktree";
     else if (outcome.exitCode !== 0) error = `not attempted: the worker run failed (exit ${outcome.exitCode})`;
     else {
-      const patch = extractPatch(reply);
-      if (patch === null) error = "no ```diff block found in the reply";
-      else error = applyPatch(worktree, patch, patchFile).error;
+      let patch = null, exact = false;
+      try {
+        const ex = extractFiles(reply);
+        patch = ex ? buildPatch(worktree, ex.files, ex.deletes) : extractPatch(reply);
+        exact = Boolean(ex);
+        if (ex && !patch) error = "patch rejected: every file in the reply is identical to the current file, so there is nothing to change";
+        else if (patch === null) error = "no ```file block (or ```diff block) found in the reply";
+      } catch (e) { error = "patch rejected: " + e.message; }
+      if (error === null) error = applyPatch(worktree, patch, patchFile, { exact }).error;
     }
     patchOut = { patchApplied: error === null, patchError: error };
     if (error) fs.appendFileSync(out.replace(/\.md$/i, "") + ".log", `patch error: ${error}\n`);
