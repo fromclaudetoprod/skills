@@ -70,7 +70,7 @@ claude-opus-5-5."*
 
 ## Orchestrate
 Say **"Orchestrate this plan"** (or "have Codex and Cursor do the work"). Claude splits your plan or task list into
-tasks, then recommends how many agents to use (0 to 4) and which model for each task. Each model writes only inside
+tasks, then recommends how many agents to use (0 to 4) and which model for each task. Each model works in
 its own git worktree. Claude or another model signs off on each task before it is committed.
 
 If the job is small, or the tasks are mostly a chain and your Claude budget is fine, Claude will say it should just do
@@ -83,7 +83,7 @@ Claude shows one table and asks "Use this lineup?" before anything runs. For exa
 |---|---|---|---|---|---|---|
 | 1 | Copy the config templates | light | Claude Haiku 5.5 | Claude CLI | uses your Claude limits (same budget as this session) | cheap and fast for copying |
 | 2 | Rewrite the permissions check | heavy | GPT-6.1-Sol | Codex CLI | uses your ChatGPT plan | careful with tricky logic |
-| 3 | Add the report export | standard | Gemini 4 Argon | Gemini CLI | ⚠ API costs will apply | independent of task 2 |
+| 3 | Add the report export | heavy | Gemini 4 Argon | Gemini CLI | ⚠ API costs will apply | independent of task 2 |
 
 Row 3 gets a question first: "Gemini 4 Argon via Gemini CLI bills your API key. Use it?" You can change any row, use
 fewer agents, or have Claude do it all.
@@ -122,13 +122,18 @@ gets a fresh session with the original diff and your note. The same happens when
 Claude tells you.
 
 ### Safety, tool by tool
-Every worker edits files only in its own worktree and has no push, deploy or commit. If anything changes in your own
-folder during the run, the run stops. Claude runs the tests itself.
+Workers are told to edit files only in their own worktree, and are not allowed to commit or push. Where the table
+below says so, the tool's own sandbox or permission flags enforce this (Codex `workspace-write`, the Claude CLI tool
+allowlist, Cursor's sandbox on macOS and Linux). Elsewhere it rests on the instruction. If anything in your own
+folder changes, Claude detects it and stops the run; that is detection, not prevention. Claude runs the tests itself.
+
+**Status:** only the Claude CLI worker has been run end to end so far. The Codex, Copilot, Gemini and Cursor write
+modes are built from each tool's documented flags and not yet tested live, so expect rough edges.
 
 | Tool | How it writes | Shell for the worker |
 |---|---|---|
-| Codex | `workspace-write` sandbox, your MCP servers switched off | inside its sandbox (may not start on Windows) |
-| Claude CLI | only Read, Grep, Glob, Edit and Write; no MCP, skills or settings | none |
+| Codex | `workspace-write` sandbox, Claude passes a flag to switch your MCP servers off | inside its sandbox (may not start on Windows) |
+| Claude CLI | only Read, Grep, Glob, Edit and Write; no MCP, skills or user settings | none |
 | Copilot | write allowed, shell and url denied | none |
 | Gemini | `auto_edit` approval mode | none |
 | Cursor | `--force`; sandbox on macOS and Linux | macOS/Linux: sandboxed. Windows: none |
