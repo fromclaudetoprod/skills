@@ -425,6 +425,23 @@ Prose only, so there's no unit test. Verification is the dry run in Step 3 plus 
 
 **Files:**
 - Create: `plugins/multi-model-review/skills/multi-model-orchestrate/SKILL.md`
+- Create: `plugins/multi-model-review/skills/multi-model-orchestrate/tools.md` (per-tool notes: write flags,
+  sandbox behavior per OS, which tools resume sessions, the Windows Cursor approval prompt, Codex's MCP note)
+- Create: `plugins/multi-model-review/skills/multi-model-orchestrate/rework.md` (step 10's rework procedure and
+  the resume details from step 8)
+
+**Three rules from Anthropic's "When to fold subagents into your main agent loop" (2026-10-22), to apply throughout:**
+1. **Hand off word for word.** A worker's brief carries the plan's task text verbatim (quoted, not rewritten),
+   plus the spec/plan path. A fix request carries the reviewer's findings and the failing test output verbatim,
+   not a summary. Claude adds only the folder path, the done criteria and the safety rules around them.
+2. **Fold first.** The recommendation says plainly: when Claude has budget left and the tasks are mostly a chain,
+   one loop in this session is often better (fewer handoffs, no lost context), so recommend 0 agents. Orchestrate
+   when the user's Claude budget is short, or when tasks are truly independent and can run in parallel. Split by
+   task and files, never by specialty ("frontend agent", "backend agent").
+3. **Keep SKILL.md short; load detail on demand.** SKILL.md holds the flow. Per-tool detail lives in `tools.md`
+   and rework/resume detail in `rework.md`, and SKILL.md says when to read each ("read `tools.md` before the
+   first `work` call with a tool you haven't used in this run"; "read `rework.md` only when resuming or
+   reworking"). Target: SKILL.md under ~200 lines.
 
 **Interfaces:**
 - Consumes: every `orchestrate.mjs` command (Tasks 4–7), `review.mjs run` for the read-only gate, and the
