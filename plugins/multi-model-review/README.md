@@ -75,6 +75,13 @@ Say **"Run the multi-model review"**. Claude asks which mode, shows the full num
 Or say **"Go back and forth with grok-4.7 on this, five exchanges at most."** Or say it all at once: *"Multi-model review of this branch, three rounds: grok-4.7, then gpt-6.1-sol, then
 claude-opus-5-5."*
 
+### Many reviews at once
+For a pile of reviews (say one per course module), Claude writes a manifest and runs `review.mjs batch manifest.json`
+as one job instead of one background job per review. Each finished background job costs Claude a full turn, so this is
+the biggest token saver. It runs 3 at a time (`--concurrency N`), retries a failed item once, and writes a single
+`batch-status.json` (ok or failed, reply path, duration and error per item). Claude reads that file and the verdicts,
+and opens a full reply only when it has to act on it.
+
 ## Orchestrate
 Say **"Orchestrate this plan"** (or "have Codex and Cursor do the work"). Claude splits your plan or task list into
 tasks, then recommends how many agents to use (0 to 4) and which model for each task. Each model works in
@@ -192,7 +199,8 @@ Run folders (briefs, replies, diffs, test logs, token use) are in `~/orchestrate
 | What | Where |
 |---|---|
 | Each round's brief, reply and the summary | `~/.claude/review-exchange/<date>-<topic>/` |
-| Token use per round and running totals | `usage.jsonl` in that folder |
+| One line per review run: time, tool, model, duration, exit status, tokens where the tool reports them (else `null`); never brief text or keys | `usage.jsonl` in that folder |
+| Result of a batch | `batch-status.json` next to the manifest |
 | Which models your account can use (learned as you go) | `~/.claude/multi-model-review/access.json` |
 | Suggested models and the never-suggest list | `models.json` in the skill folder; edit freely |
 
