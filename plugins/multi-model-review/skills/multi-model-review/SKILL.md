@@ -119,6 +119,26 @@ report tokens only). Usage is also logged to `<X>/usage.jsonl`.
 | 6 | dialogue session not found (expired or deleted) | tell the user; offer to continue with the same model in a new session, sending a full brief that includes the exchange so far |
 | 2 | anything else | retry once, then stop and report |
 
+### Many reviews at once: batch
+When you have several briefs to run (one per module, per file, per PR), do not start one background job per review:
+every finished job wakes you for a full turn. Write one manifest and run **one** job:
+```
+[{"brief": "<X>/m1-brief.md", "tool": "codex", "model": "<id>", "out": "<X>/m1-reply.md"}, ...]   (optional "repo" per item)
+node --no-deprecation "<this folder>/review.mjs" batch "<X>/manifest.json" [--concurrency 3] [--status "<X>/batch-status.json"]
+```
+It runs 3 at a time (`--concurrency N`, up to 16), retries an item once if it fails with exit 2 (not for 3, 4, 5 or 6),
+writes one `batch-status.json` and exits once: 0 when every item is ok, 7 when some failed. Each item is a normal `run`,
+so it has its own `.log` and `usage.jsonl` line. Items must have different `out` files. Wait for that one job, then read
+only `batch-status.json` (per item: `status`, `verdict`, `out`, `attempts`, `durationMs`, `error`). Open a full reply only
+for an item whose verdict is REVISE or that you must act on; do not read every reply into your context. Re-run just the
+failed items in a second manifest if the user wants them.
+
+### Usage log
+Every run, single or batch, appends one line to `<X>/usage.jsonl`: `at`, `tool`, `model`, `sessionId`, `reply`,
+`durationMs`, `exitCode`, `status` and the tokens (`inputTokens`, `cachedInputTokens`, `outputTokens`, `costUsd`) where
+the tool reports them, else `null`. Claude and the Anthropic API report tokens, Codex reports them (or only a total, as
+`totalTokens`), Cursor and Copilot usually report none. It never holds brief text, replies, keys or environment values.
+
 Read-only by flags, on every turn including resumed ones: Codex `-s read-only` (resumed: `-c sandbox_mode=read-only`);
 Cursor `--mode ask`, never `--force` (sandbox on macOS/Linux); Gemini `--approval-mode plan` (needs GEMINI_API_KEY); Anthropic API via `ant messages create`, no tools (needs the key file in the README);
 Claude gets only Read, Grep and Glob, with no MCP servers, skills or user settings; Copilot with write, shell and web

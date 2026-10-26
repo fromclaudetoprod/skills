@@ -284,6 +284,13 @@ export function sumUsage(list) {
   return t;
 }
 
+// One usage.jsonl line for a finished run: when, which tool and model, how long, how it ended, and the tokens where the
+// tool reported them (null where it did not). Never the brief, the reply, or anything from the environment.
+export function usageRow({ tool, model, sessionId, reply, durationMs, exitCode, status }, usage, at = new Date().toISOString()) {
+  return { at, tool, model, sessionId, reply, durationMs, exitCode, status,
+    ...(usage ?? { inputTokens: null, cachedInputTokens: null, outputTokens: null, costUsd: null }) };
+}
+
 // Per-tool reply, session and usage parsing. r is runTool's result. sid is the session id this run chose up front
 // (claude, gemini); chat is the Cursor chat id; resume is the id being continued. Moved as is from run().
 export function parseResult(tool, r, { session, resume, sid, chat } = {}) {
@@ -294,6 +301,9 @@ export function parseResult(tool, r, { session, resume, sid, chat } = {}) {
       if (e.type === "thread.started" && e.thread_id) sessionId = e.thread_id;
       if (e.type === "turn.completed" && e.usage) usage = { inputTokens: e.usage.input_tokens, cachedInputTokens: e.usage.cached_input_tokens, outputTokens: e.usage.output_tokens, costUsd: null };
     }
+    // Without --json events Codex only prints a "tokens used" total.
+    const total = usage ? null : `${out}\n${r.err ?? ""}`.match(/tokens used\D{0,20}([\d,]+)/i)?.[1];
+    if (total) usage = { inputTokens: null, cachedInputTokens: null, outputTokens: null, totalTokens: Number(total.replace(/,/g, "")), costUsd: null };
   } else if (tool === "claude") {
     const res = jsonObjects(out).filter((e) => e.type === "result").pop();
     if (res) {

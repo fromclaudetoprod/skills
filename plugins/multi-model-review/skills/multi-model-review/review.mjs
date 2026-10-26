@@ -11,6 +11,11 @@
 //                                              one review round, read-only, reply written to --out.
 //                                              --session new starts a conversation the reviewer keeps; pass the
 //                                              printed sessionId back as --session <id> to continue it.
+//   node review.mjs batch <manifest.json> [--concurrency N] [--status <file>]
+//                                              many reviews in ONE job. The manifest is a JSON array of
+//                                              {brief, tool, model, out[, repo]}. Runs N at a time (default 3), retries a
+//                                              failed item once, writes one status JSON (default batch-status.json next
+//                                              to the manifest, also printed) and exits once: 0 all ok, 7 some failed.
 //   node review.mjs record <tool> <model> <available|unavailable|capped> [note]
 //
 // Design rules:
@@ -21,13 +26,17 @@
 //   (MMR_ACCESS_FILE overrides). The plugin itself never stores anyone's account state.
 // - A round is judged unavailable/capped only when the tool FAILED, and only from its error output, never from
 //   the review text (a review about rate limiting must not look like a rate limit).
-// - Token use is appended to usage.jsonl next to --out, and every run prints the running total for that folder.
+// - Every run appends one line to usage.jsonl next to --out (time, tool, model, duration, exit status, tokens where the
+//   tool reports them, else null; never brief text, keys or env values) and prints the running total for that folder.
+// - batch runs each item as its own `run` child, so an item behaves exactly like a single run; the parent waits on one job.
 
+import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { anthropicEnv, readOnlyArgs, TOOLS, SESSION_TOOLS, MODEL_ID, SESSION_ID, UsageError, safePath, quote, runTool, binOf, detect, menu, plan, record,
-  jsonObjects, sumUsage, parseResult, classifyFailure, recordOutcome, repoFingerprint } from "./core.mjs";
+  jsonObjects, sumUsage, usageRow, parseResult, classifyFailure, recordOutcome, repoFingerprint } from "./core.mjs";
 
 const fail = (message) => { throw new UsageError(message); };
 
@@ -48,6 +57,7 @@ function run() {
   // modified, which a worktree at the review gate always has.
   let treeBefore = null;
   if (repo) { try { treeBefore = repoFingerprint(repo); } catch (e) { fail(e.message); } }
+  const startedAt = Date.now();
   const ask = `Read the review brief at ${brief} and do exactly what it asks. You are read-only: do not create, change or delete any file and do not run commands. Your answer is the full review, ending with the VERDICT line the brief asks for.`;
 
   let r, sid = null, chat = resume;
@@ -114,15 +124,68 @@ function run() {
   recordOutcome(tool, model, { status, note }, r);
 
   const usageFile = path.join(path.dirname(out), "usage.jsonl");
-  if (usage) fs.appendFileSync(usageFile, JSON.stringify({ at: new Date().toISOString(), tool, model, sessionId, reply: path.basename(out), ...usage }) + "\n");
+  const treeChanged = repo ? repoFingerprint(repo) !== treeBefore : false;
+  const finalExit = treeChanged ? 5 : exitCode;
+  fs.appendFileSync(usageFile, JSON.stringify(usageRow({ tool, model, sessionId, reply: path.basename(out), durationMs: Date.now() - startedAt,
+    exitCode: finalExit, status }, usage)) + "\n");
   const totals = sumUsage(fs.existsSync(usageFile) ? jsonObjects(fs.readFileSync(usageFile, "utf8")) : []);
 
-  const treeChanged = repo ? repoFingerprint(repo) !== treeBefore : false;
   const reply = fs.existsSync(out) ? fs.readFileSync(out, "utf8") : "";
   const verdict = reply.match(/VERDICT:\s*(AGREE|REVISE)/i)?.[1]?.toUpperCase() ?? null;
   console.log(JSON.stringify({ tool, model, exitCode: r.code, status, verdict, out, treeChanged, replyBytes: Buffer.byteLength(reply),
     sessionId: session ? sessionId : undefined, usage, totals }, null, 2));
-  process.exit(treeChanged ? 5 : exitCode);
+  process.exit(finalExit);
+}
+
+// Many reviews as one job. Each item is its own `run` child; exits 2 (anything else) are retried once. A capped or
+// unavailable model (3, 4), a changed tree (5) and a lost session (6) are not: a second go would not change them.
+async function batch() {
+  const file = safePath(process.argv[3] && !process.argv[3].startsWith("--") ? process.argv[3] : fail("batch needs a manifest file"), "manifest");
+  const cap = flag("concurrency") === undefined ? 3 : Number(flag("concurrency"));
+  if (!Number.isInteger(cap) || cap < 1 || cap > 16) fail("--concurrency must be a whole number from 1 to 16");
+  const statusFile = safePath(flag("status") ?? path.join(path.dirname(file), "batch-status.json"), "status");
+  let list;
+  try { list = JSON.parse(fs.readFileSync(file, "utf8")); } catch (e) { fail(`could not read the manifest ${file}: ${e.message}`); }
+  if (!Array.isArray(list) || !list.length) fail("the manifest must be a non-empty JSON array of {brief, tool, model, out}");
+  const seen = new Set();
+  const items = list.map((e, i) => {
+    const at = `item ${i + 1}`;
+    if (!e || typeof e !== "object") fail(`${at} is not an object`);
+    if (!TOOLS.includes(e.tool)) fail(`${at}: tool must be one of ${TOOLS.join(", ")}`);
+    if (!e.model || !MODEL_ID.test(e.model)) fail(`${at}: model is missing or not a valid model id`);
+    const item = { brief: safePath(e.brief ?? fail(`${at}: brief is required`), "brief"), tool: e.tool, model: e.model,
+      out: safePath(e.out ?? fail(`${at}: out is required`), "out"), repo: e.repo ? safePath(e.repo, "repo") : null };
+    if (seen.has(item.out)) fail(`${at}: another item has the same out file ${item.out}`);
+    seen.add(item.out);
+    return item;
+  });
+  const self = fileURLToPath(import.meta.url);
+  const once = (it) => new Promise((resolve) => {
+    const args = [self, "run", "--tool", it.tool, "--model", it.model, "--brief", it.brief, "--out", it.out, ...(it.repo ? ["--repo", it.repo] : [])];
+    const child = spawn(process.execPath, args, { stdio: ["ignore", "pipe", "pipe"] });
+    let out = "", err = "";
+    child.stdout.on("data", (d) => { out += d; });
+    child.stderr.on("data", (d) => { err += d; });
+    child.on("error", (e) => resolve({ code: null, out, err: e.message }));
+    child.on("close", (code) => resolve({ code, out, err }));
+  });
+  const results = new Array(items.length);
+  const work = async (i) => {
+    const it = items[i], started = Date.now();
+    let r, attempts = 0;
+    do { attempts++; r = await once(it); } while (r.code !== 0 && r.code !== 3 && r.code !== 4 && r.code !== 5 && r.code !== 6 && attempts < 2);
+    let json = null; try { json = JSON.parse(r.out); } catch { /* a usage error prints no JSON */ }
+    results[i] = { index: i + 1, tool: it.tool, model: it.model, out: it.out, status: r.code === 0 ? "ok" : "failed", exitCode: r.code, verdict: json?.verdict ?? null,
+      attempts, durationMs: Date.now() - started,
+      error: r.code === 0 ? null : (r.err.trim().split(/\r?\n/).pop() || `exit ${r.code}; see ${it.out.replace(/\.md$/i, "")}.log`).slice(0, 300) };
+  };
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(cap, items.length) }, async () => { while (next < items.length) await work(next++); }));
+  const failed = results.filter((x) => x.status === "failed").length;
+  const summary = { manifest: file, concurrency: cap, ok: results.length - failed, failed, items: results };
+  fs.writeFileSync(statusFile, JSON.stringify(summary, null, 2) + "\n");
+  console.log(JSON.stringify(summary, null, 2));
+  process.exit(failed ? 7 : 0);
 }
 
 
@@ -134,7 +197,9 @@ function main() {
   else if (command === "plan") console.log(JSON.stringify(plan(Math.max(1, Number(process.argv[3] ?? 3) || 3)), null, 2));
   else if (command === "record") { record(process.argv[3], process.argv[4], process.argv[5], process.argv[6]); console.log('{"ok":true}'); }
   else if (command === "run") run();
-  else { console.error("usage: node review.mjs detect | menu [--all] | plan <rounds> | record <tool> <model> <status> [note] | run --tool .. --model .. --brief .. --out .. [--repo ..] [--session new|<id>]"); process.exit(1); }
+  else if (command === "batch") return batch();
+  else { console.error("usage: node review.mjs detect | menu [--all] | plan <rounds> | record <tool> <model> <status> [note] | run --tool .. --model .. --brief .. --out .. [--repo ..] [--session new|<id>] | batch <manifest.json> [--concurrency N] [--status <file>]"); process.exit(1); }
 }
+const usageExit = (e) => { if (e instanceof UsageError) { console.error(e.message); process.exit(2); } throw e; };
 // Run the CLI only when this file is executed directly.
-try { main(); } catch (e) { if (e instanceof UsageError) { console.error(e.message); process.exit(2); } throw e; }
+try { Promise.resolve(main()).catch(usageExit); } catch (e) { usageExit(e); }
