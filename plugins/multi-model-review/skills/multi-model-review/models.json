@@ -1,6 +1,10 @@
 {
   "_readme": "Suggested reviewer models per tool, best first. Edit freely. 'notForReview' are patterns for small or speed-tuned models that are never suggested (you can still name one yourself). Which models YOUR account can use is learned as you go and kept in ~/.claude/multi-model-review/access.json, never here.",
   "suggested": {
+    "anthropic": [
+      { "model": "claude-opus-5-5", "why": "Claude through your Anthropic API key (promotional credit first); the strongest Claude read" },
+      { "model": "claude-sonnet-5-5", "why": "Claude through your Anthropic API key at about half Opus's price" }
+    ],
     "codex": [
       { "model": "gpt-6.1-sol", "why": "OpenAI's flagship coding model; a strong first read from outside the Claude family" },
       { "model": "gpt-5.6-terra", "why": "thorough, claim-by-claim checker at lower cost" }
@@ -33,6 +37,7 @@
   "_workersReadme": "Size tiers for orchestrate workers. Unlike review, small and fast models are welcome here.",
   "workers": {
     "claude": { "light": ["claude-haiku-5-5"], "standard": ["claude-sonnet-5-5"], "heavy": ["claude-opus-5-5"] },
+    "anthropic": { "light": ["claude-haiku-5-5"], "standard": ["claude-sonnet-5-5"], "heavy": ["claude-opus-5-5"] },
     "codex": { "light": ["gpt-6-luna"], "standard": ["gpt-6-sol"], "heavy": ["gpt-6.1-sol"] },
     "cursor": { "standard": ["grok-4.7-medium"], "heavy": ["grok-4.7-high"] },
     "gemini": { "standard": ["gemini-3.1-pro"], "heavy": ["gemini-4-argon"] },

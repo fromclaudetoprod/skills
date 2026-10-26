@@ -27,6 +27,12 @@ Everything runs on your machine, read-only. No cloud agents.
     scripted use, so the key is required. Billed per use by Google.
   - GitHub Copilot CLI (`npm install -g @github/copilot`, run `copilot` once to sign in)
   - Claude Code's own CLI (`claude`), which you already have
+  - **Claude through the Anthropic API**: Anthropic's CLI `ant` (github.com/anthropics/anthropic-cli/releases) plus an
+    API key from the Claude Console saved, one line, in `~/.config/multi-model-review/anthropic.key`
+    (`MMR_ANTHROPIC_KEY_FILE` overrides). The key goes only to the `ant` process for that round: never set
+    `ANTHROPIC_API_KEY` where Claude Code runs, or Claude Code itself moves from your plan to that key. Billed to the
+    key, promotional credit first if your organization has any. The reviewer gets the brief as its message and has no
+    tools, so it cannot touch your files.
 
 It lists every model your Cursor and Codex accounts offer (one row per model, effort levels folded in), plus the
 suggested models for Claude, Gemini and Copilot, and over time only models your account can actually use.
@@ -39,6 +45,7 @@ suggested models for Claude, Gemini and Copilot, and over time only models your 
 | Claude Code + **Codex** (ChatGPT plan) | GPT models | your ChatGPT plan |
 | Claude Code + **Copilot CLI** | the models your Copilot plan offers | Copilot credits |
 | Claude CLI (you already have it) | Claude models | your Claude limits, the same budget as this session |
+| **Anthropic API key** + `ant` | Claude models, without touching this session's limits | your API key (promotional credit first) |
 | Any mix of the above | the plugin picks a different company each round | each model shows its own label |
 
 Every model in every menu shows its tool and how it is paid. Anything billed to an API key shows

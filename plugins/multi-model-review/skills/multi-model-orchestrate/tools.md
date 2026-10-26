@@ -9,6 +9,7 @@ write access to that folder only, and no push, deploy or commit. Flags are set b
 | Claude CLI | `-p` with Read, Grep, Glob, Edit, Write; edits auto-approved only inside the worktree (`acceptEdits`); no MCP, skills or user settings. Verified live on Windows: confined | none | yes | `uses your Claude limits (same budget as this session)` |
 | Copilot | allow `write`, deny `shell` and `url`. Untested | none | no | `uses Copilot credits` |
 | Gemini | `--approval-mode auto_edit`. Untested. Patch mode: `--approval-mode plan` | none | yes | `⚠ API costs will apply` (needs `GEMINI_API_KEY`) |
+| Anthropic API (`ant`) | Patch mode only: no tools or file access; the task brief and `--context` files are the message, the reply is complete files. | none | no | `⚠ API costs will apply` (key file `~/.config/multi-model-review/anthropic.key`; promotional credit first) |
 | Cursor | `--force`. Works on Windows but is not confined there: use patch mode | macOS/Linux: `--sandbox enabled`; Windows: none | yes | `uses your Cursor plan` |
 
 ## Patch mode
@@ -69,3 +70,10 @@ success is recorded with `record-write <tool> ok`. The review menu is unaffected
 
 ## Exit codes
 Exit 10 means the task is over its token budget and the tool was not run. Pass `--task <id> --budget <n>` (input plus output tokens for that task, including fix rounds); a finished run that goes over still exits normally and sets `overBudget: true`.
+
+## Anthropic API
+- Claude through the Messages API with your API key, so the orchestrating Claude session hands real work to
+  another Claude billed to the key (promotional credit first), not to the session's own plan. Needs `ant` and the key
+  file (see the plugin README); `needsConfirm` is true, so ask the billing question every time.
+- Patch mode only. It cannot read the worktree: pass every file it must see with `--context`.
+- Untested live as a worker (2026-10-25); review rounds use the same call.

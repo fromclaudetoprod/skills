@@ -6,7 +6,7 @@
 //                                              folded into the row), best first. --all also shows small/fast models
 //   node review.mjs options [--all]            same as menu (kept for older instructions)
 //   node review.mjs plan <rounds>              a default pick per round, a different model family each round
-//   node review.mjs run --tool <codex|cursor|gemini|claude|copilot> --model <id> --brief <file> --out <file>
+//   node review.mjs run --tool <codex|cursor|gemini|claude|copilot|anthropic> --model <id> --brief <file> --out <file>
 //                       [--repo <dir>] [--session new|<id>]
 //                                              one review round, read-only, reply written to --out.
 //                                              --session new starts a conversation the reviewer keeps; pass the
@@ -26,7 +26,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { readOnlyArgs, TOOLS, SESSION_TOOLS, MODEL_ID, SESSION_ID, UsageError, safePath, quote, runTool, binOf, detect, menu, plan, record,
+import { anthropicEnv, readOnlyArgs, TOOLS, SESSION_TOOLS, MODEL_ID, SESSION_ID, UsageError, safePath, quote, runTool, binOf, detect, menu, plan, record,
   jsonObjects, sumUsage, parseResult, classifyFailure, recordOutcome, repoFingerprint } from "./core.mjs";
 
 const fail = (message) => { throw new UsageError(message); };
@@ -91,6 +91,15 @@ function run() {
       "--model", model, ...(chat ? ["--resume", chat] : []),
       "--workspace", quote(workdir), "--add-dir", quote(path.dirname(brief)), quote(ask)],
       { cwd: workdir, timeout: 900_000 });
+  } else if (tool === "anthropic") {
+    // The Messages API through Anthropic's CLI, billed to the user's API key (promotional credit first, if any). The
+    // brief goes in as the message, so the reviewer has no tools at all and cannot touch the repo; adaptive thinking
+    // at high effort. The key reaches only this child process (see anthropicEnv).
+    const body = { model, max_tokens: 32000, thinking: { type: "adaptive" }, output_config: { effort: "high" },
+      system: "You are a careful reviewer. You have no tools. Answer with the full review the brief asks for, ending with its VERDICT line.",
+      messages: [{ role: "user", content: fs.readFileSync(brief, "utf8") }] };
+    r = runTool(binOf("anthropic"), ["messages", "create", "--format", "json"],
+      { input: JSON.stringify(body), cwd: workdir, timeout: 900_000, env: anthropicEnv() });
   } else {
     r = runTool("copilot", ["-p", quote(ask), "--model", model, "--add-dir", quote(path.dirname(brief)),
       "--deny-tool", "write", "--deny-tool", "shell", "--deny-tool", "url", "--no-color", "-s"],

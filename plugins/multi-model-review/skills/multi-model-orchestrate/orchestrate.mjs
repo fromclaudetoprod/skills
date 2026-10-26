@@ -34,7 +34,8 @@ export function workerMenu({ platform = process.platform, detectFn = detect, env
       // apply only if the user overrides with --mode write.
       if (tool === "cursor" && platform === "win32") writeWarnings.push("⚠ force, no sandbox");
       if (tool === "codex" && platform === "win32") writeWarnings.push("⚠ Windows sandbox: may not write, or may write outside its folder");
-      if (defaultMode(tool, platform) === "patch") warnings.push("patch mode on Windows: proposes a diff, Claude applies it");
+      if (tool === "anthropic") warnings.push("patch mode: no file access, returns complete files, Claude applies them; pass --context for files it must see");
+      else if (defaultMode(tool, platform) === "patch") warnings.push("patch mode on Windows: proposes a diff, Claude applies it");
       if (writeStatus === "failed") warnings.push("experimental: may not write on this machine");
       rows.push({ tool, model: m.id, name: m.name, family: m.family, status: m.status, tiers,
         source: b.source, paidBy: b.paidBy, billing: b.label, sameBudgetAsSession: b.sameBudgetAsSession,

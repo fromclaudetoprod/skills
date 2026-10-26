@@ -6,7 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   TOOLS, SESSION_TOOLS, readOnlyArgs, MODEL_ID, SESSION_ID, UsageError, CODEX_HOME, safePath, quote as quoteFor, runTool, runGit, binOf, recordOutcome,
-  jsonObjects, sumUsage, parseResult, classifyFailure, repoFingerprint,
+  jsonObjects, sumUsage, parseResult, classifyFailure, repoFingerprint, anthropicEnv,
 } from "../multi-model-review/core.mjs";
 
 const fail = (message) => { throw new UsageError(message); };
@@ -24,8 +24,10 @@ export const WORKER_ASK = (briefPath) =>
 // Patch mode: the worker runs read-only and answers with the complete new contents of each changed file, which we
 // turn into an exact git patch and apply through the safety pipeline. Live 2026-10-24: Codex write mode is unsafe on
 // Windows and Cursor can only write with --force.
-export const PATCH_TOOLS = ["codex", "cursor", "gemini"];
-export const defaultMode = (tool, platform = process.platform) => (platform === "win32" && (tool === "codex" || tool === "cursor") ? "patch" : "write");
+export const PATCH_TOOLS = ["codex", "cursor", "gemini", "anthropic"];
+// The Anthropic API worker has no file access at all, so it only ever works in patch mode.
+export const PATCH_ONLY_TOOLS = ["anthropic"];
+export const defaultMode = (tool, platform = process.platform) => (PATCH_ONLY_TOOLS.includes(tool) || (platform === "win32" && (tool === "codex" || tool === "cursor")) ? "patch" : "write");
 
 // A fresh random delimiter code per `work` call: 6 uppercase letters and digits. A file's own text cannot know it.
 const CODE_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -390,6 +392,15 @@ export function workerArgs(tool, { model, worktree, brief, out, session, resume,
       "--allowedTools", "Read", "Grep", "Glob",
       "--disallowedTools", "Bash", "PowerShell", "NotebookEdit", "WebFetch", "WebSearch"] };
   }
+  if (tool === "anthropic") {
+    // Claude through the Messages API, billed to the user's API key (promotional credit first), not to the plan of
+    // the Claude session that orchestrates. No tools: the task brief and any --context files are the message, and
+    // the reply is complete files in patch blocks, which the safety pipeline turns into a patch. The key reaches only
+    // this child process (anthropicEnv).
+    const body = { model, max_tokens: 64000, thinking: { type: "adaptive" }, output_config: { effort: "high" },
+      messages: [{ role: "user", content: inlineInput(inlineAsk, brief) }] };
+    return { cmd: binOf("anthropic"), cwd, args: ["messages", "create", "--format", "json"], input: JSON.stringify(body), env: anthropicEnv() };
+  }
   if (tool === "gemini") {
     return { cmd: "gemini", cwd, args: ["-p", quote(ask), "-m", model, ...sessionFlags,
       ...(patch ? readOnlyArgs("gemini") : ["--approval-mode", "auto_edit"]), "--skip-trust", "-o", "json", "--include-directories", quote(briefDir)] };
@@ -467,6 +478,8 @@ export function work(args) {
   const mode = flag(args, "mode") ?? defaultMode(tool);
   if (mode !== "write" && mode !== "patch") fail(`--mode must be write or patch, not ${mode}`);
   if (mode === "patch" && !PATCH_TOOLS.includes(tool)) fail(`--mode patch is not supported for ${tool}; use one of ${PATCH_TOOLS.join(", ")}, or --mode write`);
+  if (mode === "write" && PATCH_ONLY_TOOLS.includes(tool)) fail(`${tool} has no file access, so it works only in --mode patch`);
+  if (session && PATCH_ONLY_TOOLS.includes(tool)) fail(`--session is not supported for ${tool}; each task is one message`);
   const resume = session && session !== "new" ? session : null;
   // --context <path> (repeatable): the current contents of existing files, appended to the brief. Workers on Windows
   // may not be able to read the folder at all. Validated here, with the other arguments, before any side effect.
@@ -505,7 +518,7 @@ export function work(args) {
     fs.writeFileSync(briefFile, `${fs.readFileSync(brief, "utf8")}\n\n${ctxParts.join("\n\n")}\n`);
   }
   const w = workerArgs(tool, { model, worktree, brief: briefFile, out, session, resume, chat, sid, isolation: iso.args, mode, code });
-  const r = runTool(w.cmd, w.args, { input: w.input, cwd: w.cwd, timeout: TIMEOUT });
+  const r = runTool(w.cmd, w.args, { input: w.input, cwd: w.cwd, timeout: TIMEOUT, env: w.env });
   const { text, sessionId, usage } = parseResult(tool, r, { session, resume, sid, chat });
   const outcome = classifyFailure(r, { resume });
   if (tool !== "codex") { const reply = text ?? r.out; if (reply) fs.writeFileSync(out, reply); }

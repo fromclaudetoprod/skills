@@ -12,16 +12,36 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const accessFile = () => process.env.MMR_ACCESS_FILE || path.join(os.homedir(), ".claude", "multi-model-review", "access.json");
 export const MODELS_FILE = path.join(HERE, "models.json");
 export const CODEX_HOME = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
-export const TOOLS = ["codex", "claude", "cursor", "gemini", "copilot"];
-export const TOOL_PREFERENCE = { codex: 0, claude: 1, gemini: 2, cursor: 3, copilot: 4 };
+export const TOOLS = ["codex", "claude", "cursor", "gemini", "copilot", "anthropic"];
+export const TOOL_PREFERENCE = { codex: 0, claude: 1, gemini: 2, cursor: 3, copilot: 4, anthropic: 5 };
 // Tools whose CLI can carry one conversation across separate runs.
 export const SESSION_TOOLS = ["codex", "claude", "cursor", "gemini"];
 // The command each tool answers to. Cursor's CLI installs as "cursor-agent" (also "agent"); a fresh install may not
 // be on PATH until a new terminal, so fall back to its default Windows install folder.
 export function binOf(tool) {
+  if (tool === "anthropic") {
+    // Anthropic's own CLI ("ant"). A release download is often put in ~/bin, which Git Bash has on PATH but
+    // Windows itself may not, so fall back to that file (MMR_ANT_BIN overrides).
+    if (process.env.MMR_ANT_BIN && !UNSAFE_PATH.test(process.env.MMR_ANT_BIN)) return quote(process.env.MMR_ANT_BIN);
+    if (runTool("ant", ["--version"]).code === 0) return "ant";
+    const home = path.join(os.homedir(), "bin", process.platform === "win32" ? "ant.exe" : "ant");
+    return fs.existsSync(home) && !UNSAFE_PATH.test(home) ? quote(home) : "ant";
+  }
   if (tool !== "cursor") return tool;
   const local = process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, "cursor-agent", "cursor-agent.cmd");
   return runTool("cursor-agent", ["--version"]).code === 0 ? "cursor-agent" : (local && fs.existsSync(local) && !UNSAFE_PATH.test(local) ? quote(local) : "cursor-agent");
+}
+// The Anthropic API key for the "anthropic" reviewer: read from its own file and handed only to the `ant` child
+// process. It is never put in this process's environment, because Claude Code itself would switch from the user's
+// plan to that key if ANTHROPIC_API_KEY were set where it runs.
+export const anthropicKeyFile = () => process.env.MMR_ANTHROPIC_KEY_FILE || path.join(os.homedir(), ".config", "multi-model-review", "anthropic.key");
+export function anthropicEnv() {
+  let key = "";
+  try { key = fs.readFileSync(anthropicKeyFile(), "utf8").trim(); } catch { /* missing: reported below */ }
+  if (!/^sk-ant-[A-Za-z0-9_-]{20,}$/.test(key)) throw new UsageError(`no Anthropic API key found in ${anthropicKeyFile()} (create a key in the Claude Console and save it there, one line)`);
+  const env = { ...process.env, ANTHROPIC_API_KEY: key };
+  delete env.ANTHROPIC_AUTH_TOKEN; delete env.ANTHROPIC_PROFILE;  // the key must win
+  return env;
 }
 export const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:\/-]{0,79}$/;
 export const SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -44,8 +64,9 @@ export const quote = (p, platform = process.platform) => (platform === "win32" ?
 
 // npm-installed CLIs are .cmd shims on Windows, which need a shell. Every argument we pass is either a fixed
 // flag, a validated model or session id, or a validated, quoted path, so nothing user-typed reaches the shell raw.
-export function runTool(cmd, args, { input, cwd, timeout = 60_000 } = {}) {
-  const r = spawnSync(cmd, args, { encoding: "utf8", shell: process.platform === "win32", input, cwd, timeout, maxBuffer: 64 * 1024 * 1024 });
+export function runTool(cmd, args, { input, cwd, timeout = 60_000, env } = {}) {
+  const r = spawnSync(cmd, args, { encoding: "utf8", shell: process.platform === "win32", input, cwd, timeout, maxBuffer: 64 * 1024 * 1024,
+    ...(env ? { env } : {}) });
   return { code: r.status, out: r.stdout ?? "", err: r.stderr ?? "", spawnError: r.error ?? null };
 }
 
@@ -147,7 +168,7 @@ export function detect() {
   return { tools, accessFile: accessFile(), modelsFile: MODELS_FILE };
 }
 
-const SOURCE = { claude: "Claude CLI", codex: "Codex CLI", cursor: "Cursor CLI", gemini: "Gemini CLI", copilot: "GitHub Copilot CLI" };
+const SOURCE = { claude: "Claude CLI", codex: "Codex CLI", cursor: "Cursor CLI", gemini: "Gemini CLI", copilot: "GitHub Copilot CLI", anthropic: "Anthropic API (ant)" };
 const PLAN_LABEL = {
   claude: "uses your Claude limits (same budget as this session)",
   codex: "uses your ChatGPT plan",
@@ -168,12 +189,13 @@ export function billingOf(tool, { env = process.env, codexHome = CODEX_HOME } = 
     else if (auth.auth_mode === "chatgpt" || (auth.tokens && typeof auth.tokens === "object")) paidBy = "plan";
     else if (auth.auth_mode === "apikey" || auth.OPENAI_API_KEY != null) paidBy = "api";
     else paidBy = "unknown";
-  } else if (tool === "gemini") {
+  } else if (tool === "gemini" || tool === "anthropic") {
     paidBy = "api";
   } else {
     paidBy = "plan";
   }
-  const label = paidBy === "plan" ? PLAN_LABEL[tool] : paidBy === "api" ? API_LABEL : UNKNOWN_LABEL;
+  const label = tool === "anthropic" ? `${API_LABEL} (your Anthropic API key; promotional credit first if your org has any)`
+    : paidBy === "plan" ? PLAN_LABEL[tool] : paidBy === "api" ? API_LABEL : UNKNOWN_LABEL;
   return { source: SOURCE[tool] ?? tool, paidBy, label,
     sameBudgetAsSession: tool === "claude" && paidBy === "plan", needsConfirm: paidBy !== "plan" };
 }
@@ -288,6 +310,17 @@ export function parseResult(tool, r, { session, resume, sid, chat } = {}) {
       for (const m of Object.values(res.stats?.models ?? {})) for (const k of Object.keys(t)) t[k] += m.tokens?.[k] ?? 0;
       usage = { inputTokens: t.prompt, cachedInputTokens: t.cached, outputTokens: t.candidates + t.thoughts, costUsd: null };
     }
+  } else if (tool === "anthropic") {
+    // A Messages API response from `ant messages create --format json`.
+    const res = jsonObjects(out).filter((e) => e.type === "message").pop();
+    if (res) {
+      text = (res.content ?? []).filter((b) => b.type === "text").map((b) => b.text).join("\n");
+      if (res.stop_reason === "refusal") text = `(the model declined this request: ${res.stop_details?.category ?? "no category"})\n` + text;
+      if (res.stop_reason === "max_tokens") text += "\n\n(reply cut off at the output limit)";
+      const u = res.usage ?? {};
+      usage = { inputTokens: (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0),
+        cachedInputTokens: u.cache_read_input_tokens ?? 0, outputTokens: u.output_tokens ?? 0, costUsd: null };
+    }
   } else if (tool === "cursor") {
     const res = jsonObjects(out).filter((e) => e.type === "result" || "result" in e).pop();
     if (res) {
@@ -311,7 +344,7 @@ export function classifyFailure(r, { resume } = {}) {
     if (resume && /(session|chat|thread|conversation)[^\n]{0,60}(not found|no such|does not exist|invalid|unknown)|no (saved )?(session|chat|conversation|thread)s? (found|with)/i.test(errText)) { status = null; exitCode = 6; }
     // Only messages about the MODEL count as "unavailable"; a sandbox or network error is not about the model.
     else if (/\bmodel\b[^\n]{0,80}\b(not (available|found|supported|enabled)|unavailable|does not exist)|unknown model|invalid model|not available (on|for) your (plan|account)/i.test(errText)) { status = "unavailable"; exitCode = 3; }
-    else if (/spend cap|usage limit|quota|rate.?limit|credits? (exhausted|exceeded)/i.test(errText)) { status = "capped"; exitCode = 4; note = errText.match(/.*(cap|limit|quota|credit).*/i)?.[0]?.trim(); }
+    else if (/spend cap|usage limit|quota|rate.?limit|credits? (exhausted|exceeded)|credit balance is too low/i.test(errText)) { status = "capped"; exitCode = 4; note = errText.match(/.*(cap|limit|quota|credit).*/i)?.[0]?.trim(); }
     else { status = null; exitCode = 2; }
   }
   return { status, exitCode, note };

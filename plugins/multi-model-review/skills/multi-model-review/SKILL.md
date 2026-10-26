@@ -120,7 +120,7 @@ report tokens only). Usage is also logged to `<X>/usage.jsonl`.
 | 2 | anything else | retry once, then stop and report |
 
 Read-only by flags, on every turn including resumed ones: Codex `-s read-only` (resumed: `-c sandbox_mode=read-only`);
-Cursor `--mode ask`, never `--force` (sandbox on macOS/Linux); Gemini `--approval-mode plan` (needs GEMINI_API_KEY);
+Cursor `--mode ask`, never `--force` (sandbox on macOS/Linux); Gemini `--approval-mode plan` (needs GEMINI_API_KEY); Anthropic API via `ant messages create`, no tools (needs the key file in the README);
 Claude gets only Read, Grep and Glob, with no MCP servers, skills or user settings; Copilot with write, shell and web
 denied. Never use a cloud coding agent for a round.
 

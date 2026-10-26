@@ -1,6 +1,6 @@
 {
   "name": "multi-model-review",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "description": "Review code or a draft with other AI models (OpenAI Codex, Cursor CLI, Google Gemini CLI, GitHub Copilot CLI or Claude CLI), run locally and read-only: a panel of fresh reviewers, or a back-and-forth dialogue with one model that keeps its session. Claude checks every claim, revises between rounds and tracks token use. Also an orchestrator: Claude hands plan tasks to other models, each working in its own git worktree, and commits each task with the agent that did it.",
   "author": {
     "name": "From Claude to Prod",
