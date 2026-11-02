@@ -173,6 +173,35 @@ function codexCatalog() {
 }
 const codexModels = (codexHome = CODEX_HOME) =>
   (readJson(path.join(codexHome, "models_cache.json"), null)?.models ?? []).filter((m) => m.slug && m.visibility !== "hide");
+// Copilot reports its models only through ACP (copilot-models.mjs). Its session/new result lists each model with a
+// usage multiplier and whether the account has it enabled; "auto" is Copilot's own router, not a model to pick.
+export function parseAcpModels(result) {
+  const seen = new Map();
+  for (const m of result?.models?.availableModels ?? []) {
+    if (!m?.modelId || m.modelId === "auto" || !MODEL_ID.test(m.modelId) || seen.has(m.modelId)) continue;
+    const enablement = m._meta?.copilotEnablement;
+    if (enablement && enablement !== "enabled") continue;
+    seen.set(m.modelId, { id: m.modelId, name: m.name ?? m.modelId, usage: m._meta?.copilotUsage ?? null });
+  }
+  return [...seen.values()];
+}
+export const copilotModelsFile = () => process.env.MMR_COPILOT_MODELS_FILE || path.join(path.dirname(accessFile()), "copilot-models.json");
+const DAY = 24 * 60 * 60 * 1000;
+// The account's Copilot models, cached for a day: each lookup opens (and closes) a Copilot session. A failed lookup
+// returns null, so the menu falls back to the suggestions as before.
+function copilotCatalog() {
+  const cached = readJson(copilotModelsFile(), null);
+  let models = cached && Date.now() - Date.parse(cached.at) < DAY ? cached.models : null;
+  if (!models) {
+    const r = spawnSync(process.execPath, [path.join(HERE, "copilot-models.mjs")], { encoding: "utf8", timeout: 60_000 });
+    const j = (() => { try { return JSON.parse((r.stdout ?? "").trim().split(/\r?\n/).pop()); } catch { return null; } })();
+    if (!Array.isArray(j?.models)) return null;
+    models = j.models;
+    writeJson(copilotModelsFile(), { at: new Date().toISOString(), models });
+  }
+  return new Map(models.map((m) => [m.id, m.usage ? `${m.name} (${m.usage} premium requests)` : m.name]));
+}
+
 // Each Codex model's supported effort levels, from the same cache.
 export function codexEffortLevels(codexHome = CODEX_HOME) {
   return new Map(codexModels(codexHome).map((m) => [m.slug, (m.supported_reasoning_levels ?? []).map((l) => l.effort).filter(Boolean)]));
@@ -188,7 +217,7 @@ export function detect() {
     if (!version) { tools[tool] = { installed: false }; continue; }
     const suggested = models.suggested?.[tool] ?? [];
     const known = Object.keys(access[tool] ?? {}).filter((k) => !k.startsWith("__"));
-    const catalog = tool === "cursor" ? cursorCatalog() : tool === "codex" ? codexCatalog() : null;
+    const catalog = tool === "cursor" ? cursorCatalog() : tool === "codex" ? codexCatalog() : tool === "copilot" ? copilotCatalog() : null;
     // With a catalog, offer everything in it (plus models already proven to work); without one, the suggestions
     // and whatever this account has used before.
     const ids = catalog
@@ -196,6 +225,7 @@ export function detect() {
       : [...new Set([...suggested.map((s) => s.model), ...known])];
     tools[tool] = {
       installed: true, version, catalog: Boolean(catalog),
+      ...(tool === "copilot" && catalog?.size === 0 ? { note: "Copilot offers only Auto on this account (no models enabled, or no premium requests left), so it has no models to pick" } : {}),
       capped: access[tool]?.__tool?.status === "capped",
       models: ids.map((id) => {
         const s = suggested.find((x) => x.model === id);

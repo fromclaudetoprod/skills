@@ -35,7 +35,8 @@ node --no-deprecation "<this folder>/review.mjs" companies
 node --no-deprecation "<this folder>/review.mjs" plan <rounds>
 ```
 `menu` lists **every** usable model, numbered, best first: everything the user's Cursor and Codex accounts list, plus
-the suggestions and anything used before for Claude, Gemini and Copilot. One row per model; its other effort levels
+the suggestions and anything used before for Claude and Gemini, and every model the user's Copilot account has
+enabled. If `detect` gives Copilot a `note` (only Auto on this account), say it once and offer no Copilot rows. One row per model; its other effort levels
 are in `variants` (any exact id can be typed). Small or speed-tuned models (`notForReview` in `models.json`) are left
 out unless you pass `--all`. `untested` models are fine to offer: a model an account lacks fails instantly and costs
 nothing, and the helper remembers the answer. Each row also has `efforts` (the reasoning levels that tool accepts for

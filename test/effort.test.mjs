@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import fs from "node:fs";
 import path from "node:path";
-import { effortArgs, effortsFor, checkEffort, codexEffortLevels, companies, UsageError }
+import { effortArgs, effortsFor, checkEffort, codexEffortLevels, companies, parseAcpModels, UsageError }
   from "../plugins/multi-model-review/skills/multi-model-review/core.mjs";
 import { workerArgs } from "../plugins/multi-model-review/skills/multi-model-orchestrate/workers.mjs";
 import { renderLedger } from "../plugins/multi-model-review/skills/multi-model-orchestrate/run.mjs";
@@ -51,6 +51,22 @@ test("companies groups the menu in pages of three, or one page of up to four", (
   assert.deepEqual(out[0].pages.map((p) => p.map((r) => r.n)), [[1, 3, 4], [5, 6]]);
   assert.deepEqual(out[1].pages.map((p) => p.map((r) => r.n)), [[2, 7]]);
   assert.equal(out[0].pages[0][0].via, "Codex CLI");
+});
+
+test("parseAcpModels keeps the enabled Copilot models, without Auto", () => {
+  const result = { models: { availableModels: [
+    { modelId: "auto", name: "Auto" },
+    { modelId: "gpt-6.1-sol", name: "GPT-6.1 Sol", _meta: { copilotUsage: "1x", copilotEnablement: "enabled" } },
+    { modelId: "claude-opus-5.5", name: "Claude Opus 5.5", _meta: { copilotUsage: "3x", copilotEnablement: "enabled" } },
+    { modelId: "grok-4.7", name: "Grok 4.7", _meta: { copilotUsage: "1x", copilotEnablement: "disabled" } },
+    { modelId: "bad id; rm", name: "x" },
+    { modelId: "gpt-6.1-sol", name: "dup" },
+  ] } };
+  assert.deepEqual(parseAcpModels(result), [
+    { id: "gpt-6.1-sol", name: "GPT-6.1 Sol", usage: "1x" },
+    { id: "claude-opus-5.5", name: "Claude Opus 5.5", usage: "3x" },
+  ]);
+  assert.deepEqual(parseAcpModels({}), []);
 });
 
 test("workers pass the chosen effort to every tool that takes one", () => {

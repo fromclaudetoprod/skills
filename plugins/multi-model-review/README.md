@@ -34,8 +34,14 @@ Everything runs on your machine, read-only. No cloud agents.
     key, promotional credit first if your organization has any. The reviewer gets the brief as its message and has no
     tools, so it cannot touch your files.
 
-It lists every model your Cursor and Codex accounts offer (one row per model, effort levels folded in), plus the
-suggested models for Claude, Gemini and Copilot, and over time only models your account can actually use.
+It lists every model your Cursor, Codex and Copilot accounts offer (one row per model, effort levels folded in), plus
+the suggested models for Claude and Gemini, and over time only models your account can actually use.
+
+Copilot has no "list models" command, so the plugin opens a Copilot session through its ACP mode, reads the models
+your account has enabled (with each one's premium-request multiplier), and closes it. No prompt is sent, so nothing
+is billed. The answer is cached for a day in `~/.claude/multi-model-review/copilot-models.json` (delete it to look
+again), because each lookup leaves a small empty session folder under `~/.copilot/session-state`. If your Copilot
+account offers only Auto, the menu says so and shows no Copilot models.
 
 ### Effort
 Claude also asks how hard the models should think: **Medium (recommended)**, High, Extra high or Low. The plugin passes
