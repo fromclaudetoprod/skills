@@ -31,16 +31,20 @@ Ask only if it is genuinely unclear (in step 3's first question).
 ## 2. See what the user can use
 ```
 node --no-deprecation "<this folder>/review.mjs" menu
+node --no-deprecation "<this folder>/review.mjs" companies
 node --no-deprecation "<this folder>/review.mjs" plan <rounds>
 ```
 `menu` lists **every** usable model, numbered, best first: everything the user's Cursor and Codex accounts list, plus
 the suggestions and anything used before for Claude, Gemini and Copilot. One row per model; its other effort levels
 are in `variants` (any exact id can be typed). Small or speed-tuned models (`notForReview` in `models.json`) are left
 out unless you pass `--all`. `untested` models are fine to offer: a model an account lacks fails instantly and costs
-nothing, and the helper remembers the answer.
+nothing, and the helper remembers the answer. Each row also has `efforts` (the reasoning levels that tool accepts for
+that model, or null when the level cannot be set: Gemini, and Cursor, whose level is part of the model id) and
+`effort`, the level used unless the user picks another (`medium`). `companies` is the same menu grouped by
+company, already split into `pages` for the two-step pick below.
 
 **Before asking which model, show the whole menu** as one compact table in your message, grouped by family
-(OpenAI, Anthropic, Google, xAI, Moonshot, Zhipu, Meta, Cursor, Other), columns `# · model · via · how it's paid · status`, with the row's `billing` label in "how it's paid",
+(OpenAI, Anthropic, Google, xAI, Moonshot, Zhipu, Meta, Cursor, Other), columns `# · model · via · how it's paid · effort · status` (effort: the row's `effort`, or "set by model id" for Cursor, "tool default" for Gemini), with the row's `billing` label in "how it's paid",
 suggested rows marked ★. The question box holds only four options, so the table is how the user sees the rest. Show
 the same numbering for every round; do not re-number between rounds. The same model can appear from more than one
 tool (Sonnet through the Claude CLI and through Copilot); the via and how-it's-paid columns tell them apart. Never
@@ -54,9 +58,17 @@ drop either column.
 - **Panel:** **"How many review rounds after my draft? Each round is a different reviewer."** Options `3 (Recommended)`,
   `2`, `1`, `4`. Rounds count reviewers only; your own draft is the starting point, not a round. Then, once the number
   is known, show the menu table and ask one question per round (up to four per AskUserQuestion call): **"Which model
-  reviews round N?"** Options: the plan's pick marked `(Recommended)`, then the two next best rows, each described as
+  reviews round N?"** Options: the plan's pick marked `(Recommended)`, the next best row, and `Pick by company`
+  ("See every model, grouped by company"). Describe each model option as
   `#<n> · via <tool> · <billing> · <family> · <available | untested> · <why>`. The automatic "Other" takes a menu number or a
   model id. Every round offers the same menu; the user may repeat a model or a family.
+- **Pick by company** (the question box holds four options, so this is how every model is reachable by clicking):
+  ask **"Which company's model for round N?"** with up to four companies from `companies`, in its order, each described
+  as `<count> models`; when there are more than four companies the fourth option is `More companies`, which asks again
+  with the next ones. Then ask **"Which <company> model for round N?"** with that company's first page (each option
+  `<model> via <via>`, described `#<n> · <billing> · <available | untested>`); when the company has more pages, the
+  fourth option is `More <company> models (<shown> of <count>)`, which asks again with the next page. Use `companies`
+  as printed; never build a page yourself.
 - **Dialogue:** show the menu table, then ask both in one call:
   - **"Which model do you want to go back and forth with?"** Options: the best non-Anthropic rows from the plan, the
     first marked `(Recommended)`; "Other" takes a number or id. Dialogue works with Codex, Claude, Cursor and Gemini,
@@ -64,6 +76,13 @@ drop either column.
   - **"At most how many exchanges?"** Options `3 (Recommended)`, `2`, `5`, `8`. Describe: "An exchange is one reply
     from the other model. It stops sooner if you two agree or stop making progress; this is the ceiling, so it cannot
     run on forever."
+- **Effort (Panel and Dialogue), asked once after the models are chosen; skipped when the user already named a level
+  ("Terra on xhigh", "high effort").** Only for chosen rows whose `efforts` is not null. **"What reasoning effort for
+  the reviewers?"** (Dialogue: "for <model>?") Options `Medium (Recommended)`, `High`, `Extra high`, `Low`, described
+  "Medium: the usual depth and cost" · "High: deeper reads, noticeably more tokens" · "Extra high: the deepest normal
+  level; several times Medium's tokens" · "Low: quick and cheap; shallower". Offer only levels every chosen row lists
+  in `efforts`. "Other" takes a level (`max`; `ultra` for Codex only, which hands the work to Codex's own
+  sub-agents) or a per-round choice ("round 2 xhigh"). Never pass a level a row's `efforts` lacks.
 - **Billing confirmation (Panel rounds and Dialogue alike).** Once every reviewer is chosen, and before step 4 or any
   run, check each chosen reviewer's menu row, including models the user typed via "Other" or by number, not only the
   options you offered. For every row with `needsConfirm: true`, ask: "**<name> via <source> bills <your API key | an
@@ -99,9 +118,14 @@ and never a secret, key, token or customer data.
 
 ## 5. Run a round or exchange
 ```
-node --no-deprecation "<this folder>/review.mjs" run --tool <codex|cursor|gemini|claude|copilot> --model <id> \
-  --brief "<X>/round-N-brief.md" --out "<X>/round-N-reply.md" [--repo "<repository root>"] [--session new|<id>]
+node --no-deprecation "<this folder>/review.mjs" run --tool <codex|cursor|gemini|claude|copilot|anthropic> --model <id> \
+  --brief "<X>/round-N-brief.md" --out "<X>/round-N-reply.md" [--repo "<repository root>"] [--session new|<id>] \
+  [--effort <level>]
 ```
+Pass `--effort` whenever the row's `efforts` is not null, with the level chosen in step 3 (`medium` if none was
+asked). Without it, Codex and Copilot fall back to whatever each user's own config says, so the same model would
+cost and think differently on different machines. The JSON prints the `effort` used; name it in the report
+("GPT-6.1 Terra via Codex, medium effort").
 Dialogue: exchange 1 passes `--session new`; the JSON prints `sessionId`; every later exchange passes
 `--session <that id>`, the same `--tool`, `--model` and `--repo`, and is run from the same place. Panel: no `--session`.
 

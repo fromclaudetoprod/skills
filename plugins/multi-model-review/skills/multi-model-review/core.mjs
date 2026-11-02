@@ -117,6 +117,44 @@ export function splitVariant(id) {
   return { base, effort: m ? m[1].toLowerCase() : null, thinking, fast };
 }
 
+// Effort ("reasoning") levels a run can ask for, per tool. Codex and Copilot otherwise use whatever the user's own
+// config says (Codex: model_reasoning_effort in config.toml, else the model's default, which is "low" for some), so
+// the same model costs and thinks differently on different machines. Gemini has no flag for it and Cursor puts the
+// level in the model id, so those two have none here. Codex narrows the list per model from its catalog.
+export const EFFORT = /^(none|minimal|low|medium|high|xhigh|max|ultra)$/;
+export const DEFAULT_EFFORT = "medium";
+const TOOL_EFFORTS = {
+  codex: ["low", "medium", "high", "xhigh", "max"],
+  claude: ["low", "medium", "high", "xhigh", "max"],
+  anthropic: ["low", "medium", "high", "xhigh", "max"],
+  copilot: ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
+};
+// "ultra" (Codex) hands work to its own sub-agents, outside the worktree and the task budget, so it is never offered;
+// a reviewer may still be given it when the user types it.
+export function effortsFor(tool, model, catalogLevels = null) {
+  const base = TOOL_EFFORTS[tool];
+  if (!base) return null;
+  const levels = tool === "codex" ? catalogLevels?.get(model) : null;
+  return levels?.length ? base.filter((e) => levels.includes(e)) : base;
+}
+// The flags that set the effort on a run. null/undefined: no flag, the tool's own default (the old behaviour).
+// Anthropic's level goes in the request body instead (see review.mjs and workers.mjs).
+export function effortArgs(tool, effort) {
+  if (!effort) return [];
+  if (tool === "codex") return ["-c", `model_reasoning_effort=${effort}`];
+  if (tool === "claude") return ["--effort", effort];
+  if (tool === "copilot") return ["--reasoning-effort", effort];
+  return [];
+}
+// Refuses a level the tool cannot take. `allowUltra` is for reviewers only (see effortsFor).
+export function checkEffort(tool, effort, { allowUltra = false } = {}) {
+  if (effort === undefined) return;
+  if (!EFFORT.test(effort ?? "")) fail(`--effort must be one of none, minimal, low, medium, high, xhigh, max: ${effort}`);
+  if (tool === "gemini" || tool === "cursor") fail(`--effort is not supported for ${tool}${tool === "cursor" ? " (pick the model id with the level in it, such as grok-4.7-high)" : " (Gemini CLI has no effort setting)"}`);
+  if (effort === "ultra" && !(tool === "codex" && allowUltra)) fail("--effort ultra is only for Codex reviewers: it hands the work to Codex's own sub-agents");
+  if (effort !== "ultra" && !TOOL_EFFORTS[tool].includes(effort)) fail(`--effort ${effort} is not a level ${tool} accepts; use one of ${TOOL_EFFORTS[tool].join(", ")}`);
+}
+
 // Cursor lists exactly what this account may use, as "id - Name" per line.
 function cursorCatalog() {
   const r = runTool(binOf("cursor"), ["models"]);
@@ -130,9 +168,14 @@ function cursorCatalog() {
 
 // Codex keeps the model list it last fetched for this account in ~/.codex/models_cache.json.
 function codexCatalog() {
-  const j = readJson(path.join(CODEX_HOME, "models_cache.json"), null);
-  const list = (j?.models ?? []).filter((m) => m.slug && m.visibility !== "hide");
+  const list = codexModels();
   return list.length ? new Map(list.map((m) => [m.slug, m.display_name ?? m.slug])) : null;
+}
+const codexModels = (codexHome = CODEX_HOME) =>
+  (readJson(path.join(codexHome, "models_cache.json"), null)?.models ?? []).filter((m) => m.slug && m.visibility !== "hide");
+// Each Codex model's supported effort levels, from the same cache.
+export function codexEffortLevels(codexHome = CODEX_HOME) {
+  return new Map(codexModels(codexHome).map((m) => [m.slug, (m.supported_reasoning_levels ?? []).map((l) => l.effort).filter(Boolean)]));
 }
 
 export function detect() {
@@ -215,12 +258,15 @@ export function menu(all = false, { env, codexHome } = {}) {
     }
   }
   const effortRank = (v) => EFFORT_ORDER.indexOf(v.effort) * 2 + (v.thinking ? 0 : 1) + (v.fast ? 20 : 0);
+  const levels = codexEffortLevels(codexHome);
   const rows = [...groups.values()].map((g) => {
     const b = billingOf(g.tool, { env, codexHome });
     const pick = g.variants.find((v) => v.suggested) ?? [...g.variants].sort((a, b) => effortRank(a) - effortRank(b))[0];
+    const efforts = effortsFor(g.tool, pick.id, levels);
     return { tool: g.tool, source: b.source, paidBy: b.paidBy, billing: b.label, sameBudgetAsSession: b.sameBudgetAsSession,
       needsConfirm: b.needsConfirm, family: g.family, model: pick.id, name: pick.name, base: g.base, status: pick.status,
-      suggested: pick.suggested, rank: pick.rank, why: pick.why, variants: g.variants.map((v) => v.id).filter((id) => id !== pick.id) };
+      suggested: pick.suggested, rank: pick.rank, why: pick.why, variants: g.variants.map((v) => v.id).filter((id) => id !== pick.id),
+      efforts, effort: efforts ? DEFAULT_EFFORT : null };
   });
   rows.sort((a, b) =>
     (b.suggested - a.suggested)
@@ -230,6 +276,19 @@ export function menu(all = false, { env, codexHome } = {}) {
     || b.base.localeCompare(a.base, undefined, { numeric: true })
     || (TOOL_PREFERENCE[a.tool] - TOOL_PREFERENCE[b.tool]));
   return rows.map((r, i) => ({ n: i + 1, ...r }));
+}
+
+// The menu grouped by company, for a two-step pick (company, then model): the question box holds only four options,
+// so each company's models are split into pages of three, the fourth option being "More <company> models". Companies
+// keep the order of their best row; the numbers are the menu's own.
+export function companies(rows) {
+  const groups = new Map();
+  for (const r of rows) {
+    if (!groups.has(r.family)) groups.set(r.family, []);
+    groups.get(r.family).push({ n: r.n, model: r.model, via: r.source, billing: r.billing, status: r.status, suggested: r.suggested, effort: r.effort });
+  }
+  return [...groups].map(([family, list]) => ({ family, count: list.length,
+    pages: list.length <= 4 ? [list] : Array.from({ length: Math.ceil(list.length / 3) }, (_, i) => list.slice(i * 3, i * 3 + 3)) }));
 }
 
 export function plan(rounds) {

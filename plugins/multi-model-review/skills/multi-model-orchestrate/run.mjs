@@ -31,7 +31,7 @@ const checkId = (id) => {
 };
 const STATUSES = ["pending", "running", "passed", "stalled", "skipped", "failed"];
 const TEST_STATES = ["passed", "failed", "not run"];
-const TASK_KEYS = ["title", "status", "worker", "tool", "model", "session", "reviewer", "fixRounds", "tests", "testLog", "commit", "note", "wave"];
+const TASK_KEYS = ["title", "status", "worker", "tool", "model", "effort", "session", "reviewer", "fixRounds", "tests", "testLog", "commit", "note", "wave"];
 const MAX_TEXT = 500;
 
 export const runRoot = () => process.env.MMO_RUN_ROOT || path.join(os.homedir(), "orchestrate-runs");
@@ -157,7 +157,7 @@ export function renderLedger(ledger) {
     "| Task | Status | Worker | Reviewer | Fix rounds | Tests | Commit |", "| --- | --- | --- | --- | --- | --- | --- |"];
   for (const [id, t] of Object.entries(ledger.tasks ?? {})) {
     const commit = t.commit ? String(t.commit).slice(0, 9) : "";
-    lines.push(`| ${cell(t.title ? `${id}: ${t.title}` : id)} | ${cell(t.status ?? "pending")} | ${cell(t.worker)} | ${cell(t.reviewer)} | ${cell(t.fixRounds)} | ${cell(t.tests)} | ${cell(commit)} |`);
+    lines.push(`| ${cell(t.title ? `${id}: ${t.title}` : id)} | ${cell(t.status ?? "pending")} | ${cell(t.worker && t.effort ? `${t.worker} (${t.effort} effort)` : t.worker)} | ${cell(t.reviewer)} | ${cell(t.fixRounds)} | ${cell(t.tests)} | ${cell(commit)} |`);
   }
   return lines.join("\n") + "\n";
 }
@@ -184,6 +184,7 @@ function checkField(key, value) {
   if (typeof value !== "string") bad("must be text");
   if (key === "tool") { if (!TOOLS.includes(value)) bad(`must be one of ${TOOLS.join(", ")}`); return value; }
   if (key === "model") { if (!MODEL_ID.test(value)) bad("is not a valid model id"); return value; }
+  if (key === "effort") { if (!/^(none|minimal|low|medium|high|xhigh|max)$/.test(value)) bad("must be one of none, minimal, low, medium, high, xhigh, max"); return value; }
   if (key === "session") { if (!SESSION_ID.test(value)) bad("is not a valid session id"); return value; }
   if (key === "commit") { if (!/^[0-9a-f]{7,64}$/.test(value)) bad("must be a commit hash"); return value; }
   if (/[\x00-\x1f\x7f]/.test(value) || value.length > MAX_TEXT) bad(`must be one line of at most ${MAX_TEXT} characters`);
@@ -309,6 +310,7 @@ export function commitTask(run, id, { title, tests, reworkOf } = {}) {
   const trailers = [];
   if (t.worker) trailers.push(`Implemented-by: ${t.worker}`);
   if (t.tool && t.session) trailers.push(`Worker-session: ${t.tool} ${t.session}`);
+  if (t.effort) trailers.push(`Effort: ${t.effort}`);
   if (t.reviewer) trailers.push(`Reviewed-by: ${t.reviewer}`);
   trailers.push(`Fix-rounds: ${t.fixRounds ?? 0}`);
   trailers.push(`Tests: ${testsValue}`);

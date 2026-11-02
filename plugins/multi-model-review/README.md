@@ -37,6 +37,31 @@ Everything runs on your machine, read-only. No cloud agents.
 It lists every model your Cursor and Codex accounts offer (one row per model, effort levels folded in), plus the
 suggested models for Claude, Gemini and Copilot, and over time only models your account can actually use.
 
+### Effort
+Claude also asks how hard the models should think: **Medium (recommended)**, High, Extra high or Low. The plugin passes
+that level to the tool on every run, so the same model behaves the same on every machine. Before 1.4.0 it passed only
+the model, and Codex and Copilot used whatever each person's own config said: GPT-6.1 Terra ran at medium on a
+machine whose `~/.codex/config.toml` set `model_reasoning_effort = "medium"`, and at Terra's own default, low,
+everywhere else.
+
+| Tool | How the level is set | Levels |
+|---|---|---|
+| Codex CLI | `-c model_reasoning_effort=<level>` | the levels Codex lists for that model (low to max) |
+| Claude CLI | `--effort <level>` | low, medium, high, xhigh, max |
+| GitHub Copilot CLI | `--reasoning-effort <level>` | none, minimal, low, medium, high, xhigh, max |
+| Anthropic API | `output_config.effort` in the request | low, medium, high, xhigh, max (high when none is chosen) |
+| Gemini CLI | not settable | the tool's default |
+| Cursor CLI | part of the model id (`grok-4.7-high`) | pick the id |
+
+Say the level up front to skip the question: *"Review this with GPT-6.1 Terra on extra high."* The report and each
+Orchestrate commit (`Effort:` line) name the level that ran. Codex's `ultra` level hands the work to Codex's own
+sub-agents, so Orchestrate refuses it for workers; a reviewer gets it only when you type it.
+
+### Picking from every model
+The question box holds four options, so each model question offers Claude's pick, the next best, and **Pick by
+company**: choose OpenAI, Anthropic, Google, xAI and so on, then that company's models, three at a time with a
+"More" option. Every model on the list is reachable by clicking, and you can still type a menu number or a model id.
+
 ## Pick a setup
 | You have | Models you get | How it is paid |
 |---|---|---|
@@ -68,7 +93,7 @@ claude plugin install multi-model-review@from-claude-to-prod
 
 ## Use it
 Say **"Run the multi-model review"**. Claude asks which mode, shows the full numbered model list, then asks:
-- **Panel:** how many rounds (three is the default) and which model for each round.
+- **Panel:** how many rounds (three is the default), which model for each round, and the effort level.
 - **Dialogue:** which model to go back and forth with, and the most exchanges to allow (three is the default). It
   stops sooner if you agree or stop making progress.
 
@@ -86,11 +111,11 @@ the work itself. Splitting a chain across agents saves budget, not time.
 ### The lineup
 Claude shows one table and asks "Use this lineup?" before anything runs. For example:
 
-| # | task | size | model | via | how it's paid | why |
-|---|---|---|---|---|---|---|
-| 1 | Copy the config templates | light | Claude Haiku 5.5 | Claude CLI | uses your Claude limits (same budget as this session) | cheap and fast for copying |
-| 2 | Rewrite the permissions check | heavy | GPT-6.1-Sol | Codex CLI | uses your ChatGPT plan | careful with tricky logic |
-| 3 | Add the report export | heavy | Gemini 4 Argon | Gemini CLI | ⚠ API costs will apply | independent of task 2 |
+| # | task | size | model | via | effort | how it's paid | why |
+|---|---|---|---|---|---|---|---|
+| 1 | Copy the config templates | light | Claude Haiku 5.5 | Claude CLI | low | uses your Claude limits (same budget as this session) | cheap and fast for copying |
+| 2 | Rewrite the permissions check | heavy | GPT-6.1-Sol | Codex CLI | high | uses your ChatGPT plan | careful with tricky logic |
+| 3 | Add the report export | heavy | Gemini 4 Argon | Gemini CLI | tool default | ⚠ API costs will apply | independent of task 2 |
 
 Row 3 gets a question first: "Gemini 4 Argon via Gemini CLI bills your API key. Use it?" You can change any row, use
 fewer agents, or have Claude do it all.

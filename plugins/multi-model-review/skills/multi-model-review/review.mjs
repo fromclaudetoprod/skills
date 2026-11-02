@@ -5,9 +5,12 @@
 //   node review.mjs menu [--all]               numbered list of usable models, one row per model (effort levels
 //                                              folded into the row), best first. --all also shows small/fast models
 //   node review.mjs options [--all]            same as menu (kept for older instructions)
+//   node review.mjs companies [--all]          the menu grouped by company, in pages of three, for a two-step pick
 //   node review.mjs plan <rounds>              a default pick per round, a different model family each round
 //   node review.mjs run --tool <codex|cursor|gemini|claude|copilot|anthropic> --model <id> --brief <file> --out <file>
-//                       [--repo <dir>] [--session new|<id>]
+//                       [--repo <dir>] [--session new|<id>] [--effort <level>]
+//                                              --effort sets the reasoning level (Codex, Claude, Copilot, Anthropic);
+//                                              without it the tool uses its own default.
 //                                              one review round, read-only, reply written to --out.
 //                                              --session new starts a conversation the reviewer keeps; pass the
 //                                              printed sessionId back as --session <id> to continue it.
@@ -26,7 +29,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { anthropicEnv, readOnlyArgs, TOOLS, SESSION_TOOLS, MODEL_ID, SESSION_ID, UsageError, safePath, quote, runTool, binOf, detect, menu, plan, record,
+import { anthropicEnv, effortArgs, checkEffort, companies, readOnlyArgs, TOOLS, SESSION_TOOLS, MODEL_ID, SESSION_ID, UsageError, safePath, quote, runTool, binOf, detect, menu, plan, record,
   jsonObjects, sumUsage, parseResult, classifyFailure, recordOutcome, repoFingerprint } from "./core.mjs";
 
 const fail = (message) => { throw new UsageError(message); };
@@ -34,8 +37,9 @@ const fail = (message) => { throw new UsageError(message); };
 const flag = (name) => { const i = process.argv.indexOf(`--${name}`); return i > 0 ? process.argv[i + 1] : undefined; };
 
 function run() {
-  const tool = flag("tool"), model = flag("model"), session = flag("session");
+  const tool = flag("tool"), model = flag("model"), session = flag("session"), effort = flag("effort");
   if (!TOOLS.includes(tool)) fail(`--tool must be one of ${TOOLS.join(", ")}`);
+  if (process.argv.includes("--effort")) checkEffort(tool, effort ?? null, { allowUltra: true });
   if (!model || !MODEL_ID.test(model)) fail(`--model is missing or not a valid model id: ${model}`);
   if (session !== undefined && session !== "new" && !SESSION_ID.test(session)) fail(`--session must be "new" or a session id: ${session}`);
   if (session && !SESSION_TOOLS.includes(tool)) fail(`--session (dialogue mode) is not supported for ${tool}; use one of ${SESSION_TOOLS.join(", ")}`);
@@ -53,7 +57,7 @@ function run() {
   let r, sid = null, chat = resume;
   if (tool === "codex") {
     // `codex exec resume` has no -s flag, so the read-only sandbox is set through config on resumed turns.
-    const common = ["--json", "--skip-git-repo-check", "-m", model, "-o", quote(out)];
+    const common = ["--json", "--skip-git-repo-check", "-m", model, ...effortArgs("codex", effort), "-o", quote(out)];
     const args = resume
       ? ["exec", "resume", ...common, ...readOnlyArgs("codex", { resume: true }), resume, "-"]
       : ["exec", ...common, ...readOnlyArgs("codex"), "-C", quote(workdir), "-"];
@@ -63,7 +67,7 @@ function run() {
     // loaded. Besides keeping it read-only, this cuts a turn from ~120k input tokens (the user's whole Claude Code
     // setup) to ~12k. Project CLAUDE.md still loads, which helps code reviews.
     sid = resume ?? (session === "new" ? crypto.randomUUID() : null);
-    r = runTool("claude", ["-p", "--model", model, ...(resume ? ["--resume", resume] : sid ? ["--session-id", sid] : []),
+    r = runTool("claude", ["-p", "--model", model, ...effortArgs("claude", effort), ...(resume ? ["--resume", resume] : sid ? ["--session-id", sid] : []),
       "--add-dir", quote(path.dirname(brief)), "--output-format", "json",
       "--tools", "Read,Grep,Glob", "--strict-mcp-config", "--disable-slash-commands", "--setting-sources", "project,local",
       "--allowedTools", "Read", "Grep", "Glob",
@@ -94,14 +98,14 @@ function run() {
   } else if (tool === "anthropic") {
     // The Messages API through Anthropic's CLI, billed to the user's API key (promotional credit first, if any). The
     // brief goes in as the message, so the reviewer has no tools at all and cannot touch the repo; adaptive thinking
-    // at high effort. The key reaches only this child process (see anthropicEnv).
-    const body = { model, max_tokens: 32000, thinking: { type: "adaptive" }, output_config: { effort: "high" },
+    // at high effort unless --effort says otherwise. The key reaches only this child process (see anthropicEnv).
+    const body = { model, max_tokens: 32000, thinking: { type: "adaptive" }, output_config: { effort: effort ?? "high" },
       system: "You are a careful reviewer. You have no tools. Answer with the full review the brief asks for, ending with its VERDICT line.",
       messages: [{ role: "user", content: fs.readFileSync(brief, "utf8") }] };
     r = runTool(binOf("anthropic"), ["messages", "create", "--format", "json"],
       { input: JSON.stringify(body), cwd: workdir, timeout: 900_000, env: anthropicEnv() });
   } else {
-    r = runTool("copilot", ["-p", quote(ask), "--model", model, "--add-dir", quote(path.dirname(brief)),
+    r = runTool("copilot", ["-p", quote(ask), "--model", model, ...effortArgs("copilot", effort), "--add-dir", quote(path.dirname(brief)),
       "--deny-tool", "write", "--deny-tool", "shell", "--deny-tool", "url", "--no-color", "-s"],
       { cwd: workdir, timeout: 900_000 });
   }
@@ -114,13 +118,13 @@ function run() {
   recordOutcome(tool, model, { status, note }, r);
 
   const usageFile = path.join(path.dirname(out), "usage.jsonl");
-  if (usage) fs.appendFileSync(usageFile, JSON.stringify({ at: new Date().toISOString(), tool, model, sessionId, reply: path.basename(out), ...usage }) + "\n");
+  if (usage) fs.appendFileSync(usageFile, JSON.stringify({ at: new Date().toISOString(), tool, model, effort: effort ?? null, sessionId, reply: path.basename(out), ...usage }) + "\n");
   const totals = sumUsage(fs.existsSync(usageFile) ? jsonObjects(fs.readFileSync(usageFile, "utf8")) : []);
 
   const treeChanged = repo ? repoFingerprint(repo) !== treeBefore : false;
   const reply = fs.existsSync(out) ? fs.readFileSync(out, "utf8") : "";
   const verdict = reply.match(/VERDICT:\s*(AGREE|REVISE)/i)?.[1]?.toUpperCase() ?? null;
-  console.log(JSON.stringify({ tool, model, exitCode: r.code, status, verdict, out, treeChanged, replyBytes: Buffer.byteLength(reply),
+  console.log(JSON.stringify({ tool, model, effort: effort ?? (tool === "anthropic" ? "high" : "tool default"), exitCode: r.code, status, verdict, out, treeChanged, replyBytes: Buffer.byteLength(reply),
     sessionId: session ? sessionId : undefined, usage, totals }, null, 2));
   process.exit(treeChanged ? 5 : exitCode);
 }
@@ -131,10 +135,11 @@ function main() {
   const all = process.argv.includes("--all");
   if (command === "detect") console.log(JSON.stringify(detect(), null, 2));
   else if (command === "menu" || command === "options") console.log(JSON.stringify(menu(all), null, 2));
+  else if (command === "companies") console.log(JSON.stringify(companies(menu(all)), null, 2));
   else if (command === "plan") console.log(JSON.stringify(plan(Math.max(1, Number(process.argv[3] ?? 3) || 3)), null, 2));
   else if (command === "record") { record(process.argv[3], process.argv[4], process.argv[5], process.argv[6]); console.log('{"ok":true}'); }
   else if (command === "run") run();
-  else { console.error("usage: node review.mjs detect | menu [--all] | plan <rounds> | record <tool> <model> <status> [note] | run --tool .. --model .. --brief .. --out .. [--repo ..] [--session new|<id>]"); process.exit(1); }
+  else { console.error("usage: node review.mjs detect | menu [--all] | companies [--all] | plan <rounds> | record <tool> <model> <status> [note] | run --tool .. --model .. --brief .. --out .. [--repo ..] [--session new|<id>] [--effort <level>]"); process.exit(1); }
 }
 // Run the CLI only when this file is executed directly.
 try { main(); } catch (e) { if (e instanceof UsageError) { console.error(e.message); process.exit(2); } throw e; }

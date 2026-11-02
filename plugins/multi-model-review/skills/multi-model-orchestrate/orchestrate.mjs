@@ -5,6 +5,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   detect, billingOf, accessFile, readJson, writeJson, MODELS_FILE, familyOf, TOOLS, TOOL_PREFERENCE, UsageError,
+  effortsFor, codexEffortLevels, DEFAULT_EFFORT,
 } from "../multi-model-review/core.mjs";
 import { work, defaultMode } from "./workers.mjs";
 import { start, task, worktree, status, commit, land, discard, rebaselineCmd, RunRefused } from "./run.mjs";
@@ -16,6 +17,7 @@ export function workerMenu({ platform = process.platform, detectFn = detect, env
   const { tools } = detectFn();
   const workers = readJson(MODELS_FILE, {}).workers ?? {};
   const access = readJson(accessFile(), {});
+  const levels = codexEffortLevels(codexHome);
   const rows = [];
   for (const [tool, t] of Object.entries(tools)) {
     if (!t.installed || t.capped) continue;
@@ -37,7 +39,8 @@ export function workerMenu({ platform = process.platform, detectFn = detect, env
       if (tool === "anthropic") warnings.push("patch mode: no file access, returns complete files, Claude applies them; pass --context for files it must see");
       else if (defaultMode(tool, platform) === "patch") warnings.push("patch mode on Windows: proposes a diff, Claude applies it");
       if (writeStatus === "failed") warnings.push("experimental: may not write on this machine");
-      rows.push({ tool, model: m.id, name: m.name, family: m.family, status: m.status, tiers,
+      const efforts = effortsFor(tool, m.id, levels);
+      rows.push({ tool, model: m.id, name: m.name, family: m.family, status: m.status, tiers, efforts, effort: efforts ? DEFAULT_EFFORT : null,
         source: b.source, paidBy: b.paidBy, billing: b.label, sameBudgetAsSession: b.sameBudgetAsSession,
         needsConfirm: b.needsConfirm, writeStatus, warnings, writeWarnings,
         mode: defaultMode(tool, platform) });

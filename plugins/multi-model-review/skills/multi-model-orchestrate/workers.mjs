@@ -6,7 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   TOOLS, SESSION_TOOLS, readOnlyArgs, MODEL_ID, SESSION_ID, UsageError, CODEX_HOME, safePath, quote as quoteFor, runTool, runGit, binOf, recordOutcome,
-  jsonObjects, sumUsage, parseResult, classifyFailure, repoFingerprint, anthropicEnv,
+  jsonObjects, sumUsage, parseResult, classifyFailure, repoFingerprint, anthropicEnv, effortArgs, checkEffort,
 } from "../multi-model-review/core.mjs";
 
 const fail = (message) => { throw new UsageError(message); };
@@ -361,7 +361,7 @@ export function readCodexConfig(codexHome = CODEX_HOME) {
 }
 
 // worktree and brief are absolute and already safe. sid is the session id chosen up front (claude, gemini).
-export function workerArgs(tool, { model, worktree, brief, out, session, resume, chat, sid, isolation = [], mode = "write", platform = process.platform, code = newCode() }) {
+export function workerArgs(tool, { model, worktree, brief, out, session, resume, chat, sid, isolation = [], mode = "write", platform = process.platform, code = newCode(), effort = null }) {
   const patch = mode === "patch";
   const mk = patch ? (b) => WORKER_PATCH_ASK(b, code) : WORKER_ASK;
   const ask = mk(brief), inlineAsk = mk(null);
@@ -375,7 +375,7 @@ export function workerArgs(tool, { model, worktree, brief, out, session, resume,
     // Live 2026-10-24: Codex write mode is unsafe on Windows (the elevated sandbox cannot write; in the unelevated
     // one apply_patch wrote outside the worktree), so the menu warns there.
     const iso = isolation.map((v) => (v === "-c" ? v : configArg(v, platform)));
-    const common = ["--json", "--skip-git-repo-check", "-m", model, "-o", quote(out)];
+    const common = ["--json", "--skip-git-repo-check", "-m", model, ...effortArgs("codex", effort), "-o", quote(out)];
     const args = resume
       ? ["exec", "resume", ...common, ...(patch ? readOnlyArgs("codex", { resume: true }) : ["-c", "sandbox_mode=workspace-write"]), ...iso, resume, "-"]
       : ["exec", ...common, ...(patch ? readOnlyArgs("codex") : ["-s", "workspace-write"]), "-C", quote(worktree), ...iso, "-"];
@@ -386,7 +386,7 @@ export function workerArgs(tool, { model, worktree, brief, out, session, resume,
     // --tools so the model has them, and --permission-mode acceptEdits auto-approves edits only inside the working
     // folder; a write outside it is refused. No shell, no web.
     // verify live: Claude worker still writes in cwd and is refused outside it
-    return { cmd: "claude", cwd, input: inlineInput(inlineAsk, brief), args: ["-p", "--model", model, ...sessionFlags,
+    return { cmd: "claude", cwd, input: inlineInput(inlineAsk, brief), args: ["-p", "--model", model, ...effortArgs("claude", effort), ...sessionFlags,
       "--output-format", "json", "--tools", "Read,Grep,Glob,Edit,Write", "--strict-mcp-config", "--disable-slash-commands",
       "--setting-sources", "project,local", "--permission-mode", "acceptEdits",
       "--allowedTools", "Read", "Grep", "Glob",
@@ -397,7 +397,7 @@ export function workerArgs(tool, { model, worktree, brief, out, session, resume,
     // the Claude session that orchestrates. No tools: the task brief and any --context files are the message, and
     // the reply is complete files in patch blocks, which the safety pipeline turns into a patch. The key reaches only
     // this child process (anthropicEnv).
-    const body = { model, max_tokens: 64000, thinking: { type: "adaptive" }, output_config: { effort: "high" },
+    const body = { model, max_tokens: 64000, thinking: { type: "adaptive" }, output_config: { effort: effort ?? "high" },
       messages: [{ role: "user", content: inlineInput(inlineAsk, brief) }] };
     return { cmd: binOf("anthropic"), cwd, args: ["messages", "create", "--format", "json"], input: JSON.stringify(body), env: anthropicEnv() };
   }
@@ -412,7 +412,7 @@ export function workerArgs(tool, { model, worktree, brief, out, session, resume,
       "--trust", "--output-format", "json", "--model", model, ...(chat ? ["--resume", chat] : []),
       "--workspace", quote(worktree), "--add-dir", quote(briefDir), quote(ask)] };
   }
-  return { cmd: "copilot", cwd, args: ["-p", quote(ask), "--model", model, "--add-dir", quote(briefDir),
+  return { cmd: "copilot", cwd, args: ["-p", quote(ask), "--model", model, ...effortArgs("copilot", effort), "--add-dir", quote(briefDir),
     "--allow-tool", "write", "--deny-tool", "shell", "--deny-tool", "url", "--no-color", "-s"] };
 }
 
@@ -440,8 +440,9 @@ const porcelain = (dir) => runGit(dir, ["status", "--porcelain"]);
 const same = (a, b) => (process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b);
 
 export function work(args) {
-  const tool = flag(args, "tool"), model = flag(args, "model"), session = flag(args, "session");
+  const tool = flag(args, "tool"), model = flag(args, "model"), session = flag(args, "session"), effort = flag(args, "effort");
   if (!TOOLS.includes(tool)) fail(`--tool must be one of ${TOOLS.join(", ")}`);
+  if (args.includes("--effort")) checkEffort(tool, effort ?? null);
   if (!model || !MODEL_ID.test(model)) fail(`--model is missing or not a valid model id: ${model}`);
   if (session !== undefined && session !== "new" && !SESSION_ID.test(session)) fail(`--session must be "new" or a session id: ${session}`);
   if (session && !SESSION_TOOLS.includes(tool)) fail(`--session is not supported for ${tool}; use one of ${SESSION_TOOLS.join(", ")}`);
@@ -517,7 +518,7 @@ export function work(args) {
     briefFile = out.replace(/\.md$/i, "") + ".brief.md";
     fs.writeFileSync(briefFile, `${fs.readFileSync(brief, "utf8")}\n\n${ctxParts.join("\n\n")}\n`);
   }
-  const w = workerArgs(tool, { model, worktree, brief: briefFile, out, session, resume, chat, sid, isolation: iso.args, mode, code });
+  const w = workerArgs(tool, { model, worktree, brief: briefFile, out, session, resume, chat, sid, isolation: iso.args, mode, code, effort: effort ?? null });
   const r = runTool(w.cmd, w.args, { input: w.input, cwd: w.cwd, timeout: TIMEOUT, env: w.env });
   const { text, sessionId, usage } = parseResult(tool, r, { session, resume, sid, chat });
   const outcome = classifyFailure(r, { resume });
@@ -525,7 +526,7 @@ export function work(args) {
   fs.writeFileSync(out.replace(/\.md$/i, "") + ".log", `exit ${r.code}\nmode ${mode}\n${tool === "codex" ? `isolation skipped (left enabled): ${JSON.stringify(iso.skipped)}\n` : ""}--- stderr ---\n${r.err}\n${text === null && tool !== "codex" ? "" : `--- stdout ---\n${r.out}\n`}`);
   recordOutcome(tool, model, outcome, r);
 
-  if (usage) fs.appendFileSync(usageFile, JSON.stringify({ at: new Date().toISOString(), tool, model, sessionId, reply: path.basename(out), ...usage, task: task ?? null }) + "\n");
+  if (usage) fs.appendFileSync(usageFile, JSON.stringify({ at: new Date().toISOString(), tool, model, effort: effort ?? null, sessionId, reply: path.basename(out), ...usage, task: task ?? null }) + "\n");
   const rows = usageRows();
   const totals = sumUsage(rows);
   const taskSpent = spentOn(rows, task ?? null);
@@ -557,7 +558,7 @@ export function work(args) {
   }
   const changedFiles = porcelain(worktree).out.split(/\r?\n/).filter(Boolean)
     .map((l) => l.slice(3).replace(/^.* -> /, "").replace(/^"(.*)"$/, "$1"));
-  console.log(JSON.stringify({ tool, model, exitCode: r.code, status: outcome.status, out, sessionId: session ? sessionId : undefined,
+  console.log(JSON.stringify({ tool, model, effort: effort ?? (tool === "anthropic" ? "high" : "tool default"), exitCode: r.code, status: outcome.status, out, sessionId: session ? sessionId : undefined,
     usage, totals, needs: parseNeeds(reply, mode === "patch" ? code : undefined), changedFiles, outsideChanged, mode, ...patchOut, isolationSkipped: iso.skipped,
     task: task ?? null, taskSpent, budget, budgetLeft, overBudget }, null, 2));
   process.exit(outsideChanged ? 5 : outcome.exitCode !== 0 ? outcome.exitCode : patchOut.patchError ? 9 : 0);

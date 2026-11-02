@@ -55,8 +55,9 @@ the reviewer's read alone.
 node --no-deprecation "<this folder>/orchestrate.mjs" menu
 ```
 `menu` prints one numbered row per installed tool and model: `tiers` (the sizes it suits), `source`, `billing`,
-`paidBy`, `sameBudgetAsSession`, `needsConfirm`, `writeStatus`, `warnings`. Take model ids only from here, never
-from memory.
+`paidBy`, `sameBudgetAsSession`, `needsConfirm`, `writeStatus`, `warnings`, `efforts` (the reasoning levels the
+tool accepts for that model, or null when it cannot be set) and `effort` (`medium` by default). Take model ids
+only from here, never from memory.
 - **Agent count 0 to 4.** 0 when the job is small (about one short task, or a few files of simple edits): say "This
   is small enough that I'll just do it." and offer to. 1 is the default minimum for a real run. More than 1 only for
   independent tasks in the same wave, never more than 4.
@@ -64,17 +65,23 @@ from memory.
   (fewer handoffs, no lost context). Recommend agents when the budget is short or the tasks are independent and can
   run in parallel. If the budget is unclear, ask one short question. When you do recommend agents for a chain, say
   plainly that the gain is budget, not speed.
+- **Effort per task**, from the row's `efforts`: `low` or `medium` for small mechanical edits, `medium` by default,
+  `high` for tricky logic, `xhigh` only for the hardest task in the plan. Higher levels use several times the tokens,
+  so set `--budget` to match. Never `ultra`: it hands the work to Codex's own sub-agents, outside the worktree and the
+  budget, and `work` refuses it.
 - Per task, pick from rows whose `tiers` include the task's size. If the user said they are near their Claude limit,
   prefer non-Anthropic rows. Whenever a row with `sameBudgetAsSession` is chosen as a worker, say that Claude CLI
   workers share your Claude limits with this session.
 
-Show one table: `# · task · size · model · via · how it's paid · why` (why = one short phrase), with each row's
+Show one table: `# · task · size · model · via · effort · how it's paid · why` (why = one short phrase), with each row's
 `warnings` inline, then the setup and test commands and one paragraph of recommendation.
 
 ## 4. Ask (AskUserQuestion), skipping anything the user already said (except the billing confirmation)
-1. **"Use this lineup?"** `Yes, run it (Recommended)` · `Change some models` · `Fewer agents` · `I'll just have you do
-   it` (the last only when you recommended agents). "Change some models" asks one question per task to change, with
-   the menu table shown first, the way `multi-model-review` asks per round.
+1. **"Use this lineup?"** `Yes, run it (Recommended)` · `Change models or effort` · `Fewer agents` · `I'll just have
+   you do it` (the last only when you recommended agents). "Change models or effort" asks, per task to change, for the
+   model the way `multi-model-review` asks per round (the menu table shown first, with its **Pick by company** step so
+   every model is reachable by clicking), then **"What effort for <task>?"** with the levels that row's `efforts` lists.
+   When the user named a level ("all on high"), use it without asking.
 2. **"Who should sign off on each task before it's committed?"**
    - `This Claude session (Recommended)`: "I'll read every change myself, check it against the plan, and decide
      whether it passes or goes back for another pass. The most careful option, and it uses more of your Claude
@@ -105,8 +112,9 @@ Tell the user to avoid editing the repo while the run is going; any edit there s
 Then record every task:
 ```
 node --no-deprecation "<this folder>/orchestrate.mjs" task --run "<run>" --id t1 --set title="…" --set wave=1 \
-  --set worker="<model> via <Tool> CLI" --set tool=<tool> --set model=<id>
+  --set worker="<model> via <Tool> CLI" --set tool=<tool> --set model=<id> [--set effort=<level>]
 ```
+Set `effort` whenever the row's `efforts` is not null; it goes in the ledger and in an `Effort:` line on the commit.
 Worker naming is `<model display name or id> via <Tool name CLI>`, e.g. `Grok 4.7 High via Cursor CLI`. Set
 `reviewer` the same way when someone other than this session signs off (`Claude, this session` otherwise).
 
@@ -121,8 +129,9 @@ Worker naming is `<model display name or id> via <Tool name CLI>`, e.g. `Grok 4.
    ```
    node --no-deprecation "<this folder>/orchestrate.mjs" work --tool <tool> --model <id> --repo "<repository root>" \
      --worktree "<wt>" --brief "<run>/briefs/t1/brief.md" --out "<run>/replies/t1-r1.md" \
-     --task <id> --budget <n> [--session new]
+     --task <id> --budget <n> [--effort <level>] [--session new]
    ```
+   Pass the task's `--effort` on every `work` call for it, fix rounds included, whenever the row's `efforts` is not null.
    Always pass `--task <id> --budget <n>`. Show the user the per-tool running `totals` after every `work` call.
    Pass `--session new` for codex, claude, cursor and gemini, then store the printed `sessionId` with
    `task --set session=<id>`; Copilot has no sessions. In patch mode, pass `--context <path>` (repeatable) for every existing file the task changes (the plan's Files list): their current contents are appended to the brief, because workers on Windows may not be able to read files. Never tell a worker to read a large folder (for example a framework's bundled docs); pass only the specific files or snippets it needs with `--context`. Output: `status`, `needs`, `changedFiles`, `outsideChanged`,
