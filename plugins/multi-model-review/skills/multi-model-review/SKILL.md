@@ -20,8 +20,9 @@ Helper: `review.mjs`, in the same folder as this file. Run it as `node --no-depr
 
 ## If you are Codex, not Claude Code
 This skill was written for Claude Code. When Codex runs it:
-- Pass `--host codex` to every `review.mjs` command that lists or plans models (`menu`, `companies`, `plan`). Your own model
-  family (OpenAI) then reads last, and Codex rows are labelled as sharing this session's budget.
+- Pass `--host codex` to every `review.mjs` command that lists or plans models (`menu`, `companies`, `plan`). `plan`
+  then puts your own family (OpenAI) last, and Codex rows are labelled as sharing this session's budget. The menu's
+  order does not change; when you recommend from it yourself, prefer families other than OpenAI.
 - Where this file says Claude, "this Claude session" or "you", it means you, the agent running the skill. Claude CLI
   is then just one more tool on the menu, billed to the user's Claude plan.
 - Ask questions with `request_user_input` when you have it, with the same question text and options this file
@@ -91,7 +92,7 @@ drop either column.
   fourth option is `More <company> models (<shown> of <count>)`, which asks again with the next page. Use `companies`
   as printed; never build a page yourself.
 - **Dialogue:** show the menu table, then ask both in one call:
-  - **"Which model do you want to go back and forth with?"** Options: the best non-Anthropic rows from the plan, the
+  - **"Which model do you want to go back and forth with?"** Options: the best rows from the plan outside your own family (not Anthropic under Claude Code, not OpenAI under Codex), the
     first marked `(Recommended)`; "Other" takes a number or id. Dialogue works with Codex, Claude, Cursor and Gemini,
     not Copilot.
   - **"At most how many exchanges?"** Options `3 (Recommended)`, `2`, `5`, `8`. Describe: "An exchange is one reply

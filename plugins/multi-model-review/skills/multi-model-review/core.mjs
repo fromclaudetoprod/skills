@@ -341,8 +341,8 @@ export function companies(rows) {
     pages: list.length <= 4 ? [list] : Array.from({ length: Math.ceil(list.length / 3) }, (_, i) => list.slice(i * 3, i * 3 + 3)) }));
 }
 
-export function plan(rounds, { host = "claude" } = {}) {
-  const all = menu(false, { host });
+export function plan(rounds, { host = "claude", rows, hidden } = {}) {
+  const all = rows ?? menu(false, { host });
   const usable = all.filter((o) => o.suggested);
   // The host wrote the work, so a model from another family reads first: the point is a read not anchored on its own.
   const author = HOSTS[host].family;
@@ -357,7 +357,7 @@ export function plan(rounds, { host = "claude" } = {}) {
   // Whatever the mix, the author's own family goes last: the outside reads come first.
   picked.sort((a, b) => (a.family === author) - (b.family === author));
   return { rounds, plan: picked.map((o, i) => ({ round: i + 1, n: o.n, tool: o.tool, model: o.model, family: o.family, status: o.status, why: o.why })),
-    shortBy: Math.max(0, rounds - picked.length), menuSize: all.length, hidden: hiddenTools() };
+    shortBy: Math.max(0, rounds - picked.length), menuSize: all.length, hidden: hidden ?? hiddenTools() };
 }
 
 // Installed tools left out of the menu, with the reason, so the user is told instead of the tool vanishing.

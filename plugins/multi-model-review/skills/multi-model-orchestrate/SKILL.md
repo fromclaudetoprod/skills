@@ -18,8 +18,9 @@ The review helper is `../multi-model-review/review.mjs`. Read only the file you 
 
 ## If you are Codex, not Claude Code
 This skill was written for Claude Code. When Codex runs it:
-- Pass `--host codex` to every `orchestrate.mjs` command that lists or plans models (`orchestrate.mjs menu`, and `review.mjs menu`, `companies`, `plan`). Your own model
-  family (OpenAI) then reads last, and Codex rows are labelled as sharing this session's budget.
+- Pass `--host codex` to every command that lists or plans models (`orchestrate.mjs menu`, and `review.mjs menu`,
+  `companies`, `plan`). The worker menu and `plan` then put your own family (OpenAI) last, and Codex rows are
+  labelled as sharing this session's budget.
 - Where this file says Claude, "this Claude session" or "you", it means you, the agent running the skill. Claude CLI
   is then just one more tool on the menu, billed to the user's Claude plan.
 - Ask questions with `request_user_input` when you have it, with the same question text and options this file
@@ -87,9 +88,10 @@ how to offer it again.
   `high` for tricky logic, `xhigh` only for the hardest task in the plan. Higher levels use several times the tokens,
   so set `--budget` to match. Never `ultra`: it hands the work to Codex's own sub-agents, outside the worktree and the
   budget, and `work` refuses it.
-- Per task, pick from rows whose `tiers` include the task's size. If the user said they are near their Claude limit,
-  prefer non-Anthropic rows. Whenever a row with `sameBudgetAsSession` is chosen as a worker, say that Claude CLI
-  workers share your Claude limits with this session.
+- Per task, pick from rows whose `tiers` include the task's size. If the user said they are near their limit on this
+  session's plan, prefer rows outside your own family (not Anthropic under Claude Code, not OpenAI under Codex).
+  Whenever a row with `sameBudgetAsSession` is chosen as a worker, say that those workers share your limits with this
+  session.
 
 Show one table: `# · task · size · model · via · effort · how it's paid · why` (why = one short phrase), with each row's
 `warnings` inline, then the setup and test commands and one paragraph of recommendation.
@@ -104,11 +106,11 @@ Show one table: `# · task · size · model · via · effort · how it's paid ·
    - `This Claude session (Recommended)`: "I'll read every change myself, check it against the plan, and decide
      whether it passes or goes back for another pass. The most careful option, and it uses more of your Claude
      budget."
-   - `Other models: I'm close to my Claude limit`: "Another model reviews each change and gives a verdict. I only
+   - `Other models: I'm close to my limit`: "Another model reviews each change and gives a verdict. I only
      read the verdict and run the tests, so sign-off costs your Claude budget very little."
 
    If the user said they are near their limit, mark the second `(Recommended)` instead. If others sign off, ask which
-   model reviews: default a different family from the task's worker, non-Claude first, labelled like workers.
+   model reviews: default a different family from the task's worker, a family other than your own first, labelled like workers.
 3. **Billing confirmation**, for every chosen worker or reviewer row with `needsConfirm: true` (including ones the
    user typed via "Other"): "**<name> via <source> bills <your API key | an account I can't identify>. Use it?**"
    with `Yes, bill my API key` (or `Yes, run it anyway (billing unclear)` when `paidBy` is `unknown`) and

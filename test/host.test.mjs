@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import fs from "node:fs";
 import path from "node:path";
-import { billingOf, hostFrom, UsageError } from "../plugins/multi-model-review/skills/multi-model-review/core.mjs";
+import { billingOf, hostFrom, plan, UsageError } from "../plugins/multi-model-review/skills/multi-model-review/core.mjs";
 import { workerMenu } from "../plugins/multi-model-review/skills/multi-model-orchestrate/orchestrate.mjs";
 import { tmpDir } from "./helpers.mjs";
 
@@ -32,6 +32,14 @@ test("the host's own tool shares the session budget; the default is unchanged", 
   const claudeUnderCodex = billingOf("claude", { env: {}, codexHome: home, host: "codex" });
   assert.equal(claudeUnderCodex.label, "uses your Claude limits");
   assert.equal(claudeUnderCodex.sameBudgetAsSession, false);
+});
+
+test("plan puts the host's own family last: Anthropic under Claude Code, OpenAI under Codex", () => {
+  const row = (n, family) => ({ n, family, tool: "t", model: `m${n}`, status: "available", suggested: true, why: null });
+  const rows = [row(1, "OpenAI"), row(2, "Anthropic"), row(3, "xAI")];
+  const families = (host) => plan(3, { host, rows, hidden: [] }).plan.map((p) => p.family);
+  assert.deepEqual(families("claude"), ["OpenAI", "xAI", "Anthropic"]);
+  assert.deepEqual(families("codex"), ["Anthropic", "xAI", "OpenAI"]);
 });
 
 test("under a Codex host, OpenAI workers sort after other families", () => {
