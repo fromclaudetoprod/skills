@@ -18,6 +18,22 @@ Two modes:
 
 Helper: `review.mjs`, in the same folder as this file. Run it as `node --no-deprecation "<this folder>/review.mjs" …`.
 
+## If you are Codex, not Claude Code
+This skill was written for Claude Code. When Codex runs it:
+- Pass `--host codex` to every `review.mjs` command that lists or plans models (`menu`, `companies`, `plan`). Your own model
+  family (OpenAI) then reads last, and Codex rows are labelled as sharing this session's budget.
+- Where this file says Claude, "this Claude session" or "you", it means you, the agent running the skill. Claude CLI
+  is then just one more tool on the menu, billed to the user's Claude plan.
+- Ask questions with `request_user_input` when you have it, with the same question text and options this file
+  gives. Without it, ask in chat as a numbered list (the same options, plus "or type a menu number or model id")
+  and wait for the reply. Never pick on the user's behalf.
+- The helpers start other command-line tools, need the network, write under `~/.claude/multi-model-review`
+  and `~/.claude/review-exchange`. Codex's sandbox blocks that, and
+  on Windows it cannot start them at all. Before the first helper command, tell the user it needs full access and
+  ask them to approve it (or to start Codex with `--sandbox danger-full-access`). Never weaken a helper's own
+  read-only or worktree flags to get round the sandbox.
+- Run each helper command with a timeout of at least 15 minutes and wait for it; do not poll.
+
 ## 1. Pin down what is reviewed
 Take it from the conversation when it is clear: the draft you just wrote, the current branch, a PR the user named.
 Ask only if it is genuinely unclear (in step 3's first question).

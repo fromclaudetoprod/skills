@@ -5,7 +5,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   detect, billingOf, accessFile, readJson, writeJson, MODELS_FILE, familyOf, TOOLS, TOOL_PREFERENCE, UsageError,
-  effortsFor, codexEffortLevels, DEFAULT_EFFORT,
+  effortsFor, codexEffortLevels, DEFAULT_EFFORT, HOSTS, hostFrom,
 } from "../multi-model-review/core.mjs";
 import { work, defaultMode } from "./workers.mjs";
 import { start, task, worktree, status, commit, land, discard, rebaselineCmd, RunRefused } from "./run.mjs";
@@ -13,7 +13,7 @@ import { start, task, worktree, status, commit, land, discard, rebaselineCmd, Ru
 const TIER_ORDER = ["heavy", "standard", "light"];
 
 // One numbered row per installed tool x model, tagged with the size tiers that list it.
-export function workerMenu({ platform = process.platform, detectFn = detect, env = process.env, codexHome } = {}) {
+export function workerMenu({ platform = process.platform, detectFn = detect, env = process.env, codexHome, host = "claude" } = {}) {
   const { tools } = detectFn();
   const workers = readJson(MODELS_FILE, {}).workers ?? {};
   const access = readJson(accessFile(), {});
@@ -21,7 +21,7 @@ export function workerMenu({ platform = process.platform, detectFn = detect, env
   const rows = [];
   for (const [tool, t] of Object.entries(tools)) {
     if (!t.installed || t.capped) continue;
-    const b = billingOf(tool, { env, codexHome });
+    const b = billingOf(tool, { env, codexHome, host });
     const writeStatus = access[tool]?.__write?.status ?? "untested";
     // Tools with no model catalog only list review suggestions, so add the worker-tier ids (Haiku is not a review model).
     const listed = new Set(t.models.map((m) => m.id));
@@ -50,7 +50,7 @@ export function workerMenu({ platform = process.platform, detectFn = detect, env
   rows.sort((a, b) =>
     ((b.tiers.length > 0) - (a.tiers.length > 0))
     || (best(a) - best(b))
-    || ((a.family === "Anthropic") - (b.family === "Anthropic"))
+    || ((a.family === HOSTS[host].family) - (b.family === HOSTS[host].family))
     || (TOOL_PREFERENCE[a.tool] - TOOL_PREFERENCE[b.tool]));
   return rows.map((r, i) => ({ n: i + 1, ...r }));
 }
@@ -68,7 +68,7 @@ export function recordWrite(tool, status, note) {
 const flag = (args, name) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined; };
 
 const COMMANDS = {
-  menu: (args) => console.log(JSON.stringify(workerMenu({ platform: flag(args, "--platform") ?? process.platform }), null, 2)),
+  menu: (args) => console.log(JSON.stringify(workerMenu({ platform: flag(args, "--platform") ?? process.platform, host: hostFrom(args) }), null, 2)),
   "record-write": (args) => { recordWrite(args[0], args[1], args[2]); console.log('{"ok":true}'); },
   work,
   start, task, worktree, status, commit, land, discard, rebaseline: rebaselineCmd,

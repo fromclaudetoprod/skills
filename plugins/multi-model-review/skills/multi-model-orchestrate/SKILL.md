@@ -16,6 +16,22 @@ The review helper is `../multi-model-review/review.mjs`. Read only the file you 
 - `tools.md`: before the first `work` call with a tool you have not used in this run.
 - `rework.md`: only when resuming, reworking an earlier task, or sending a fix back to a worker's session.
 
+## If you are Codex, not Claude Code
+This skill was written for Claude Code. When Codex runs it:
+- Pass `--host codex` to every `orchestrate.mjs` command that lists or plans models (`orchestrate.mjs menu`, and `review.mjs menu`, `companies`, `plan`). Your own model
+  family (OpenAI) then reads last, and Codex rows are labelled as sharing this session's budget.
+- Where this file says Claude, "this Claude session" or "you", it means you, the agent running the skill. Claude CLI
+  is then just one more tool on the menu, billed to the user's Claude plan.
+- Ask questions with `request_user_input` when you have it, with the same question text and options this file
+  gives. Without it, ask in chat as a numbered list (the same options, plus "or type a menu number or model id")
+  and wait for the reply. Never pick on the user's behalf.
+- The helpers start other command-line tools, need the network, write under `~/.claude/multi-model-review`
+  and `~/orchestrate-runs`, and create git worktrees beside the repository. Codex's sandbox blocks that, and
+  on Windows it cannot start them at all. Before the first helper command, tell the user it needs full access and
+  ask them to approve it (or to start Codex with `--sandbox danger-full-access`). Never weaken a helper's own
+  read-only or worktree flags to get round the sandbox.
+- Run each helper command with a timeout of at least 30 minutes and wait for it; do not poll.
+
 Rules for the whole run:
 - **Hand off word for word.** A brief carries the plan's task text verbatim (quoted, not rewritten) and the spec or
   plan path. A fix request carries the reviewer's findings and the failing test output verbatim, not a summary. You

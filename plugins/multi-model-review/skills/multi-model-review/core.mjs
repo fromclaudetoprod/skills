@@ -250,9 +250,20 @@ export function detect() {
   return { tools, accessFile: accessFile(), modelsFile: MODELS_FILE };
 }
 
+// The agent running the skill ("host"): Claude Code by default, or Codex. The host wrote the work under review, so
+// its own model family reads last, and workers on the host's own tool share the host session's budget. Callers pass
+// --host codex; nothing else changes with the default.
+export const HOSTS = { claude: { family: "Anthropic", tool: "claude" }, codex: { family: "OpenAI", tool: "codex" } };
+export function hostFrom(argv = process.argv, env = process.env) {
+  const i = argv.indexOf("--host");
+  const host = i >= 0 ? argv[i + 1] : env.MMR_HOST || "claude";
+  if (!HOSTS[host]) fail(`--host must be one of ${Object.keys(HOSTS).join(", ")}: ${host}`);
+  return host;
+}
+
 const SOURCE = { claude: "Claude CLI", codex: "Codex CLI", cursor: "Cursor CLI", gemini: "Gemini CLI", copilot: "GitHub Copilot CLI", anthropic: "Anthropic API (ant)" };
 const PLAN_LABEL = {
-  claude: "uses your Claude limits (same budget as this session)",
+  claude: "uses your Claude limits",
   codex: "uses your ChatGPT plan",
   cursor: "uses your Cursor plan",
   copilot: "uses Copilot credits",
@@ -261,7 +272,7 @@ const API_LABEL = "⚠ API costs will apply";
 const UNKNOWN_LABEL = "may be billed by API key; check";
 
 // Where a tool's cost lands. Reads only the env and codexHome it is given, so callers can inject both.
-export function billingOf(tool, { env = process.env, codexHome = CODEX_HOME } = {}) {
+export function billingOf(tool, { env = process.env, codexHome = CODEX_HOME, host = "claude" } = {}) {
   let paidBy;
   if (tool === "claude") {
     paidBy = env.ANTHROPIC_API_KEY || env.CLAUDE_CODE_USE_BEDROCK || env.CLAUDE_CODE_USE_VERTEX ? "api" : "plan";
@@ -276,14 +287,14 @@ export function billingOf(tool, { env = process.env, codexHome = CODEX_HOME } = 
   } else {
     paidBy = "plan";
   }
+  const same = tool === HOSTS[host].tool && paidBy === "plan";
   const label = tool === "anthropic" ? `${API_LABEL} (your Anthropic API key; promotional credit first if your org has any)`
-    : paidBy === "plan" ? PLAN_LABEL[tool] : paidBy === "api" ? API_LABEL : UNKNOWN_LABEL;
-  return { source: SOURCE[tool] ?? tool, paidBy, label,
-    sameBudgetAsSession: tool === "claude" && paidBy === "plan", needsConfirm: paidBy !== "plan" };
+    : paidBy === "plan" ? PLAN_LABEL[tool] + (same ? " (same budget as this session)" : "") : paidBy === "api" ? API_LABEL : UNKNOWN_LABEL;
+  return { source: SOURCE[tool] ?? tool, paidBy, label, sameBudgetAsSession: same, needsConfirm: paidBy !== "plan" };
 }
 
 // One numbered row per model per tool. A row's "model" is the id to run; "variants" are the other effort levels.
-export function menu(all = false, { env, codexHome } = {}) {
+export function menu(all = false, { env, codexHome, host = "claude" } = {}) {
   const { tools } = detect();
   const groups = new Map();
   for (const [tool, t] of Object.entries(tools)) {
@@ -299,7 +310,7 @@ export function menu(all = false, { env, codexHome } = {}) {
   const effortRank = (v) => EFFORT_ORDER.indexOf(v.effort) * 2 + (v.thinking ? 0 : 1) + (v.fast ? 20 : 0);
   const levels = codexEffortLevels(codexHome);
   const rows = [...groups.values()].map((g) => {
-    const b = billingOf(g.tool, { env, codexHome });
+    const b = billingOf(g.tool, { env, codexHome, host });
     const pick = g.variants.find((v) => v.suggested) ?? [...g.variants].sort((a, b) => effortRank(a) - effortRank(b))[0];
     const efforts = effortsFor(g.tool, pick.id, levels);
     return { tool: g.tool, source: b.source, paidBy: b.paidBy, billing: b.label, sameBudgetAsSession: b.sameBudgetAsSession,
@@ -330,11 +341,12 @@ export function companies(rows) {
     pages: list.length <= 4 ? [list] : Array.from({ length: Math.ceil(list.length / 3) }, (_, i) => list.slice(i * 3, i * 3 + 3)) }));
 }
 
-export function plan(rounds) {
-  const all = menu();
+export function plan(rounds, { host = "claude" } = {}) {
+  const all = menu(false, { host });
   const usable = all.filter((o) => o.suggested);
-  // The author is Claude, so a non-Anthropic model reads first: the point is a read not anchored on Claude's.
-  const ordered = [...usable].sort((a, b) => (a.family === "Anthropic") - (b.family === "Anthropic"));
+  // The host wrote the work, so a model from another family reads first: the point is a read not anchored on its own.
+  const author = HOSTS[host].family;
+  const ordered = [...usable].sort((a, b) => (a.family === author) - (b.family === author));
   const picked = [];
   for (let i = 0; i < rounds; i++) {
     const families = new Set(picked.map((p) => p.family));
@@ -342,8 +354,8 @@ export function plan(rounds) {
     if (!next) break;
     picked.push(next);
   }
-  // Whatever the mix, Claude-family reviewers go last: the outside reads come first.
-  picked.sort((a, b) => (a.family === "Anthropic") - (b.family === "Anthropic"));
+  // Whatever the mix, the author's own family goes last: the outside reads come first.
+  picked.sort((a, b) => (a.family === author) - (b.family === author));
   return { rounds, plan: picked.map((o, i) => ({ round: i + 1, n: o.n, tool: o.tool, model: o.model, family: o.family, status: o.status, why: o.why })),
     shortBy: Math.max(0, rounds - picked.length), menuSize: all.length, hidden: hiddenTools() };
 }

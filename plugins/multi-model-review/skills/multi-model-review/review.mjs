@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // multi-model-review helper (From Claude to Prod). Prints JSON on stdout.
 //
+//   Every command takes --host codex when Codex, not Claude Code, is running the skill (or MMR_HOST=codex).
 //   node review.mjs detect                     installed reviewer tools and every model each can offer
 //   node review.mjs menu [--all]               numbered list of usable models, one row per model (effort levels
 //                                              folded into the row), best first. --all also shows small/fast models
@@ -30,7 +31,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { anthropicEnv, effortArgs, checkEffort, companies, hiddenTools, readOnlyArgs, TOOLS, SESSION_TOOLS, MODEL_ID, SESSION_ID, UsageError, safePath, quote, runTool, binOf, detect, menu, plan, record,
+import { anthropicEnv, effortArgs, checkEffort, companies, hiddenTools, hostFrom, readOnlyArgs, TOOLS, SESSION_TOOLS, MODEL_ID, SESSION_ID, UsageError, safePath, quote, runTool, binOf, detect, menu, plan, record,
   jsonObjects, sumUsage, parseResult, classifyFailure, recordOutcome, repoFingerprint } from "./core.mjs";
 
 const fail = (message) => { throw new UsageError(message); };
@@ -135,10 +136,10 @@ function main() {
   const command = process.argv[2];
   const all = process.argv.includes("--all");
   if (command === "detect") console.log(JSON.stringify(detect(), null, 2));
-  else if (command === "menu" || command === "options") console.log(JSON.stringify(menu(all), null, 2));
+  else if (command === "menu" || command === "options") console.log(JSON.stringify(menu(all, { host: hostFrom() }), null, 2));
   else if (command === "hidden") console.log(JSON.stringify(hiddenTools(), null, 2));
-  else if (command === "companies") console.log(JSON.stringify(companies(menu(all)), null, 2));
-  else if (command === "plan") console.log(JSON.stringify(plan(Math.max(1, Number(process.argv[3] ?? 3) || 3)), null, 2));
+  else if (command === "companies") console.log(JSON.stringify(companies(menu(all, { host: hostFrom() })), null, 2));
+  else if (command === "plan") console.log(JSON.stringify(plan(Math.max(1, Number(process.argv[3] ?? 3) || 3), { host: hostFrom() }), null, 2));
   else if (command === "record") { record(process.argv[3], process.argv[4], process.argv[5], process.argv[6]); console.log('{"ok":true}'); }
   else if (command === "run") run();
   else { console.error("usage: node review.mjs detect | menu [--all] | companies [--all] | plan <rounds> | record <tool> <model> <status> [note] | run --tool .. --model .. --brief .. --out .. [--repo ..] [--session new|<id>] [--effort <level>]"); process.exit(1); }
