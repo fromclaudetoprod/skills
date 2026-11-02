@@ -28,6 +28,7 @@ test("splitVariant folds effort and fast", () => {
 test("familyOf", () => {
   assert.equal(familyOf("gpt-6.1-sol"), "OpenAI");
   assert.equal(familyOf("claude-haiku-5-5"), "Anthropic");
+  assert.equal(familyOf("mai-code-1.1-flash"), "Microsoft");
   assert.equal(familyOf("grok-4.7"), "xAI");
   assert.equal(familyOf("gemini-4-argon"), "Google");
 });

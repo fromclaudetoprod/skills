@@ -6,7 +6,10 @@ import { spawn } from "node:child_process";
 import os from "node:os";
 import { parseAcpModels } from "./core.mjs";
 
-const p = spawn("copilot", ["--acp", "--no-custom-instructions"], { shell: process.platform === "win32", stdio: ["pipe", "pipe", "ignore"] });
+// One fixed command string: on Windows the .cmd shim needs a shell, and Node warns about args passed alongside one.
+const p = process.platform === "win32"
+  ? spawn("copilot --acp --no-custom-instructions", { shell: true, stdio: ["pipe", "pipe", "ignore"] })
+  : spawn("copilot", ["--acp", "--no-custom-instructions"], { stdio: ["pipe", "pipe", "ignore"] });
 let buf = "", finished = false;
 const send = (id, method, params) => p.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n");
 const finish = (result) => {

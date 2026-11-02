@@ -101,6 +101,7 @@ export function familyOf(id) {
   if (m.startsWith("glm")) return "Zhipu";
   if (m.startsWith("muse")) return "Meta";
   if (m.startsWith("composer")) return "Cursor";
+  if (m.startsWith("mai-")) return "Microsoft";
   return "Other";
 }
 

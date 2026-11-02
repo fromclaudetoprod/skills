@@ -45,7 +45,7 @@ that model, or null when the level cannot be set: Gemini, and Cursor, whose leve
 company, already split into `pages` for the two-step pick below.
 
 **Before asking which model, show the whole menu** as one compact table in your message, grouped by family
-(OpenAI, Anthropic, Google, xAI, Moonshot, Zhipu, Meta, Cursor, Other), columns `# · model · via · how it's paid · effort · status` (effort: the row's `effort`, or "set by model id" for Cursor, "tool default" for Gemini), with the row's `billing` label in "how it's paid",
+(OpenAI, Anthropic, Google, xAI, Moonshot, Zhipu, Meta, Microsoft, Cursor, Other), columns `# · model · via · how it's paid · effort · status` (effort: the row's `effort`, or "set by model id" for Cursor, "tool default" for Gemini), with the row's `billing` label in "how it's paid",
 suggested rows marked ★. The question box holds only four options, so the table is how the user sees the rest. Show
 the same numbering for every round; do not re-number between rounds. The same model can appear from more than one
 tool (Sonnet through the Claude CLI and through Copilot); the via and how-it's-paid columns tell them apart. Never
