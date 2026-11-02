@@ -14,6 +14,7 @@
 //                                              one review round, read-only, reply written to --out.
 //                                              --session new starts a conversation the reviewer keeps; pass the
 //                                              printed sessionId back as --session <id> to continue it.
+//   node review.mjs hidden                     installed tools the menu leaves out, and why (also in plan's output)
 //   node review.mjs record <tool> <model> <available|unavailable|capped> [note]
 //
 // Design rules:
@@ -29,7 +30,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { anthropicEnv, effortArgs, checkEffort, companies, readOnlyArgs, TOOLS, SESSION_TOOLS, MODEL_ID, SESSION_ID, UsageError, safePath, quote, runTool, binOf, detect, menu, plan, record,
+import { anthropicEnv, effortArgs, checkEffort, companies, hiddenTools, readOnlyArgs, TOOLS, SESSION_TOOLS, MODEL_ID, SESSION_ID, UsageError, safePath, quote, runTool, binOf, detect, menu, plan, record,
   jsonObjects, sumUsage, parseResult, classifyFailure, recordOutcome, repoFingerprint } from "./core.mjs";
 
 const fail = (message) => { throw new UsageError(message); };
@@ -135,6 +136,7 @@ function main() {
   const all = process.argv.includes("--all");
   if (command === "detect") console.log(JSON.stringify(detect(), null, 2));
   else if (command === "menu" || command === "options") console.log(JSON.stringify(menu(all), null, 2));
+  else if (command === "hidden") console.log(JSON.stringify(hiddenTools(), null, 2));
   else if (command === "companies") console.log(JSON.stringify(companies(menu(all)), null, 2));
   else if (command === "plan") console.log(JSON.stringify(plan(Math.max(1, Number(process.argv[3] ?? 3) || 3)), null, 2));
   else if (command === "record") { record(process.argv[3], process.argv[4], process.argv[5], process.argv[6]); console.log('{"ok":true}'); }

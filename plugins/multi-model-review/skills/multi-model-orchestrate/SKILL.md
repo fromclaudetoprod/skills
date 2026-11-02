@@ -57,7 +57,9 @@ node --no-deprecation "<this folder>/orchestrate.mjs" menu
 `menu` prints one numbered row per installed tool and model: `tiers` (the sizes it suits), `source`, `billing`,
 `paidBy`, `sameBudgetAsSession`, `needsConfirm`, `writeStatus`, `warnings`, `efforts` (the reasoning levels the
 tool accepts for that model, or null when it cannot be set) and `effort` (`medium` by default). Take model ids
-only from here, never from memory.
+only from here, never from memory. Also run `node --no-deprecation "<this folder>/../multi-model-review/review.mjs" hidden`
+and say, above the lineup, each installed tool it lists and why (for example a spend cap from an earlier day), with
+how to offer it again.
 - **Agent count 0 to 4.** 0 when the job is small (about one short task, or a few files of simple edits): say "This
   is small enough that I'll just do it." and offer to. 1 is the default minimum for a real run. More than 1 only for
   independent tasks in the same wave, never more than 4.

@@ -34,6 +34,10 @@ node --no-deprecation "<this folder>/review.mjs" menu
 node --no-deprecation "<this folder>/review.mjs" companies
 node --no-deprecation "<this folder>/review.mjs" plan <rounds>
 ```
+`plan` also prints `hidden`: installed tools left out of the menu and why (a recent usage or spend cap; Copilot
+offering only Auto). **Say each one in a line above the menu table**, for example "Codex CLI is hidden: it hit your
+workspace spend cap on 2026-10-28. Say 'try Codex again' to offer it now." If the user says so, run the `record`
+command from its reason, then `menu` again. Never let an installed tool vanish without saying why.
 `menu` lists **every** usable model, numbered, best first: everything the user's Cursor and Codex accounts list, plus
 the suggestions and anything used before for Claude and Gemini, and every model the user's Copilot account has
 enabled. If `detect` gives Copilot a `note` (only Auto on this account), say it once and offer no Copilot rows. One row per model; its other effort levels
@@ -190,7 +194,8 @@ dispute with both sides stated fairly, and a total-tokens line taken from `total
 - The exchange folder as one full absolute path.
 
 ## Upkeep
-- Access is learned automatically. After a cap lifts: `node "<this folder>/review.mjs" record <tool> __tool available`.
+- Access is learned automatically. A cap is trusted for 24 hours, then the tool is offered again, and any run that
+  works clears it. To use a capped tool sooner: `node "<this folder>/review.mjs" record <tool> __tool available`.
 - `models.json` holds the suggestions and the never-suggest patterns; edit it as models prove themselves.
 - Cost: what each tool bills depends on the user's login; the billing labels in the menu say which (a plan, Copilot
   credits, or an API key). A Claude reviewer turn is about 12k input tokens

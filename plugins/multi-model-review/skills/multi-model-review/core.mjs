@@ -208,6 +208,13 @@ export function codexEffortLevels(codexHome = CODEX_HOME) {
   return new Map(codexModels(codexHome).map((m) => [m.slug, (m.supported_reasoning_levels ?? []).map((l) => l.effort).filter(Boolean)]));
 }
 
+// A cap (spend cap, usage limit, rate limit) is trusted for a day, then the tool or model is offered again: caps lift,
+// and a model that is still capped fails at once without billing anything. Before 1.4.2 a cap was kept until someone
+// cleared it by hand, so a tool capped once stayed hidden for good.
+export const CAP_HOURS = 24;
+export const capActive = (entry, now = Date.now()) =>
+  entry?.status === "capped" && !(now - Date.parse(entry.date) >= CAP_HOURS * 3600_000);
+
 export function detect() {
   const access = readJson(accessFile(), {});
   const models = readJson(MODELS_FILE, { suggested: {}, notForReview: [] });
@@ -227,13 +234,14 @@ export function detect() {
     tools[tool] = {
       installed: true, version, catalog: Boolean(catalog),
       ...(tool === "copilot" && catalog?.size === 0 ? { note: "Copilot offers only Auto on this account (no models enabled, or no premium requests left), so it has no models to pick" } : {}),
-      capped: access[tool]?.__tool?.status === "capped",
+      capped: capActive(access[tool]?.__tool),
+      ...(access[tool]?.__tool?.status === "capped" ? { cap: { since: access[tool].__tool.date, note: access[tool].__tool.note ?? null, active: capActive(access[tool].__tool) } } : {}),
       models: ids.map((id) => {
         const s = suggested.find((x) => x.model === id);
         const blocked = notForReview.find((re) => re.test(id));
         const a = access[tool]?.[id];
         return { id, name: catalog?.get(id) ?? null, family: familyOf(id), ...splitVariant(id),
-          status: a?.status ?? "untested", checked: a?.date ?? null,
+          status: a?.status === "capped" && !capActive(a) ? "untested" : a?.status ?? "untested", checked: a?.date ?? null,
           suggested: Boolean(s) && !blocked, rank: s ? suggested.indexOf(s) + 1 : null, blocked: Boolean(blocked),
           why: s?.why ?? (blocked ? `not suggested for review (matches "${blocked.source}")` : null) };
       }),
@@ -337,7 +345,18 @@ export function plan(rounds) {
   // Whatever the mix, Claude-family reviewers go last: the outside reads come first.
   picked.sort((a, b) => (a.family === "Anthropic") - (b.family === "Anthropic"));
   return { rounds, plan: picked.map((o, i) => ({ round: i + 1, n: o.n, tool: o.tool, model: o.model, family: o.family, status: o.status, why: o.why })),
-    shortBy: Math.max(0, rounds - picked.length), menuSize: all.length };
+    shortBy: Math.max(0, rounds - picked.length), menuSize: all.length, hidden: hiddenTools() };
+}
+
+// Installed tools left out of the menu, with the reason, so the user is told instead of the tool vanishing.
+export function hiddenTools(tools = detect().tools) {
+  const out = [];
+  for (const [tool, t] of Object.entries(tools)) {
+    if (!t.installed) continue;
+    if (t.capped) out.push({ tool, reason: `hit a usage or spend cap on ${t.cap.since}; offered again after ${CAP_HOURS} hours, or now with: record ${tool} __tool available`, note: t.cap.note });
+    else if (t.note) out.push({ tool, reason: t.note });
+  }
+  return out;
 }
 
 export function record(tool, model, status, note) {
@@ -355,6 +374,8 @@ export function recordOutcome(tool, model, { status, note }, r) {
   if (!status) return;
   record(tool, model, status, note);
   if (status === "capped" && !/(different|another|other) model/i.test(r.err + r.out)) record(tool, "__tool", "capped", note);
+  // A run that worked proves the tool is usable again, so a tool-wide cap is lifted.
+  if (status === "available" && readJson(accessFile(), {})[tool]?.__tool?.status === "capped") record(tool, "__tool", "available");
 }
 
 // The tools print JSON (one object, an array of events, or JSON lines). Return every object found.
