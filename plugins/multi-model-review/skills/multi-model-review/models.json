@@ -6,7 +6,7 @@
       { "model": "claude-sonnet-5-5", "why": "Claude through your Anthropic API key at about half Opus's price" }
     ],
     "codex": [
-      { "model": "gpt-6.1-sol", "why": "OpenAI's flagship coding model; a strong first read from outside the Claude family" },
+      { "model": "gpt-6.1-sol", "why": "OpenAI's flagship coding model; a strong read on code" },
       { "model": "gpt-5.6-terra", "why": "thorough, claim-by-claim checker at lower cost" }
     ],
     "gemini": [
@@ -19,17 +19,17 @@
       { "model": "gpt-5.6-sol-high", "why": "OpenAI's family through Cursor, if you have no Codex subscription" },
       { "model": "kimi-k3-high", "why": "Moonshot's family through Cursor for a further independent read" },
       { "model": "glm-5.2-high", "why": "Zhipu's family through Cursor" },
-      { "model": "claude-opus-5-5-high", "why": "Claude through Cursor; same family as the author, so last" }
+      { "model": "claude-opus-5-5-high", "why": "Claude through Cursor" }
     ],
     "copilot": [
       { "model": "grok-4.7", "why": "a different model family (xAI) for an independent read" },
       { "model": "gpt-6.1-sol", "why": "OpenAI flagship, if you have no Codex subscription" },
       { "model": "kimi-k3", "why": "another family (Moonshot) for a third independent read" },
       { "model": "gemini-4-argon", "why": "Google's family, where your Copilot plan enables it" },
-      { "model": "claude-opus-5.5", "why": "strong, but the same family as the author, so last" }
+      { "model": "claude-opus-5.5", "why": "Anthropic's flagship through your Copilot plan" }
     ],
     "claude": [
-      { "model": "claude-opus-5-5", "why": "a fresh-context Claude read; same family as the author, so prefer another family first" },
+      { "model": "claude-opus-5-5", "why": "a fresh-context Claude read" },
       { "model": "claude-sonnet-5-5", "why": "an independent Claude read at lower cost" }
     ]
   },

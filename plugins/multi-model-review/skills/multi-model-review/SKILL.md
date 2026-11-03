@@ -27,7 +27,10 @@ This skill was written for Claude Code. When Codex runs it:
   is then just one more tool on the menu, billed to the user's Claude plan.
 - Ask questions with `request_user_input` when you have it, with the same question text and options this file
   gives. Without it, ask in chat as a numbered list (the same options, plus "or type a menu number or model id")
-  and wait for the reply. Never pick on the user's behalf.
+  and wait for the reply. Ask one question per message, in this file's order, so the company step and the effort
+  step are not skipped. Never pick on the user's behalf.
+- Show the menu's `billing` text as the helper prints it, including "(same budget as this session)". Before the
+  menu, run `review.mjs hidden` and say each hidden tool and its reason in one line, as this file says for `plan`.
 - The helpers start other command-line tools, need the network, write under `~/.claude/multi-model-review`
   and `~/.claude/review-exchange`. Codex's sandbox blocks that, and
   on Windows it cannot start them at all. Before the first helper command, tell the user it needs full access and
