@@ -21,6 +21,15 @@ Then install what you want:
 |---|---|---|
 | [multi-model-review](plugins/multi-model-review/README.md) | Several AI models review your code or draft in turn, read-only, with Claude checking every claim. Also hands plan tasks to other models, each in its own git worktree, and commits each task with the agent that did it | `/plugin install multi-model-review@from-claude-to-prod` |
 
+### In Codex
+The same plugin also runs with Codex as the manager. In a terminal:
+```
+codex plugin marketplace add fromclaudetoprod/skills
+codex plugin add multi-model-review@from-claude-to-prod
+```
+Start a new Codex session with full access (`codex --sandbox danger-full-access`, or **Agent (full access)** in the
+VS Code extension): the skills start other command-line tools, which Codex's sandbox blocks.
+
 Coming next: **daily-routine** (`/start-of-day`, `/end-of-day` and a team dashboard kept in git).
 
 MIT licensed.

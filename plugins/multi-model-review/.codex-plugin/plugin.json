@@ -1,6 +1,6 @@
 {
   "name": "multi-model-review",
-  "version": "1.4.2",
+  "version": "1.5.0",
   "description": "Review code or a draft with other AI models (Claude CLI, GitHub Copilot CLI, Google Gemini CLI, Codex or the Anthropic API), run locally and read-only, with the managing agent checking every claim. Also an orchestrator: hands plan tasks to other models, each in its own git worktree, and commits each task with the agent that did it.",
   "author": {
     "name": "From Claude to Prod",
