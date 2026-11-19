@@ -133,8 +133,21 @@ You pick one:
 - **Other models:** another model reviews each change and gives a verdict. Claude reads the verdict and runs the
   tests. Use this when you are close to your Claude limit.
 
-A task that fails goes back to its worker with the findings and the test output, word for word. After three fix
+Before anyone reviews a task, its checks run (see *Check gate*). A task that fails goes back to its worker with the findings and the test output, word for word. After three fix
 rounds Claude asks you: a different model, Claude does it, or skip.
+
+### Check gate
+Add `.orchestrate/checks.json` to your repository to say what every task must pass:
+
+```json
+{ "checks": [ { "name": "tests", "run": "npm test" }, { "name": "lint", "run": "npm run lint" } ], "timeoutMinutes": 20 }
+```
+
+Each task's checks run in its own folder before any review. If one fails, the log goes straight back to the worker,
+so no reviewer is paid to read code that is known to be broken. A task is committed only when its last check passed
+on exactly the files being committed; you can override that with a reason, which is written into the commit. The
+file is read from your folder, never from the worker's, so a worker cannot change its own checks. Without the file,
+Claude uses the plan's or the detected test command.
 
 ### One commit per task
 Workers never commit, push or deploy. Claude commits each task that passes, on a run branch, and nothing is pushed by

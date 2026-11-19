@@ -65,8 +65,11 @@ List tasks: id, title, files, depends-on, size. Sizes:
 - **heavy**: cross-cutting changes, security-sensitive code, tricky logic, migrations.
 
 Group tasks into **waves** by depends-on (a task that uses what another creates goes in a later wave). Find the
-setup command (install or restore) and the test command: the plan's if it names them, else detect them
-(`package.json` scripts, `.sln` / `.csproj`, `pyproject.toml`, `Makefile`). With no test command, say so now:
+setup command (install or restore) and the checks. If the repository has `.orchestrate/checks.json`
+(`{"checks":[{"name":"tests","run":"npm test"}],"timeoutMinutes":20}`), those are the checks; say so. Otherwise use the
+plan's test command if it names one, else detect it (`package.json` scripts, `.sln` / `.csproj`, `pyproject.toml`,
+`Makefile`), pass it to `check` with `--cmd`, and offer once to save it as `.orchestrate/checks.json` (the user commits
+it; never create it during a run, because the run refuses changes in the user's folder). With no test command, say so now:
 those tasks are committed as `Tests: not run`, never called passed on tests, and under "others sign off" they rest on
 the reviewer's read alone.
 
@@ -110,7 +113,7 @@ Show one table: `# · task · size · model · via · effort · how it's paid ·
      whether it passes or goes back for another pass. The most careful option, and it uses more of your Claude
      budget."
    - `Other models: I'm close to my limit`: "Another model reviews each change and gives a verdict. I only
-     read the verdict and run the tests, so sign-off costs your Claude budget very little."
+     read the verdict and run the checks, so sign-off costs your Claude budget very little."
 
    If the user said they are near their limit, mark the second `(Recommended)` instead. If others sign off, ask which
    model reviews: default a different family from the task's worker, a family other than your own first, labelled like workers.
@@ -175,9 +178,14 @@ Worker naming is `<model display name or id> via <Tool name CLI>`, e.g. `Grok 4.
    command inside the worktree. Never run migrations, pushes, deploys, or network calls outside the package manager;
    ask the user about anything else. Then send the worker back (`rework.md`). A failure caused by missing setup is
    not a fix round.
-6. Run the tests yourself in the worktree and save the log to exactly `<run>/tests/t1.log` (`start` creates only `briefs/`; make `tests/` and `diffs/` yourself). `commit` with `--tests passed` or `failed` refuses (exit 2) without a non-empty file at that path. Where the language allows, run tests with cache-writing off (`PYTHONDONTWRITEBYTECODE=1` for Python).
+6. **Check gate.** `check --run "<run>" --id t1 [--cmd "<test command>"]...` runs every check in the worktree, stops at
+   the first failure, writes the log to `<run>/tests/t1.log` and prints `result`, `failed` (the check's name) and
+   `log`. The checks come from the user's `.orchestrate/checks.json` when it exists (`--cmd` is then ignored), never
+   from the worktree. Exit 0 passed · **11 failed: go straight to step 8 with the log, verbatim. Do not review a task
+   whose checks failed**; that review would be paid for code already known to be broken · 2 no checks file and no
+   `--cmd`. Only with no test command at all, skip `check` and commit with `--tests not-run`. Make `diffs/` yourself.
    **Before `commit`** (it runs `git add -A`) compare `git -C "<wt>" status --porcelain` with the worker's `changedFiles` plus the files from its fix rounds. List candidates with the dry run `git -C "<wt>" clean -nd`. Delete only paths that are untracked, are not in `changedFiles` or any fix-round list, and are known artifacts (`__pycache__/`, `.pytest_cache/`, `coverage/`, `.coverage`, `*.pyc`). Never delete a tracked file or anything else.
-7. **Gate.** `git -C "<wt>" add -N .` (deliberate, so the diff shows new files) then `git -C "<wt>" diff > "<run>/diffs/t1.patch"`.
+7. **Review** (only after a passed check). `git -C "<wt>" add -N .` (deliberate, so the diff shows new files) then `git -C "<wt>" diff > "<run>/diffs/t1.patch"`.
    - *This session signs off:* read the diff and the test log; decide against the plan.
    - *Others sign off:* write a review brief at `<run>/briefs/t1-review/brief.md`, a folder of its own apart from the task's (diff pasted in, the task brief, the test log, ending in
      `VERDICT: AGREE` or `VERDICT: REVISE` with `## Required changes`, as in `multi-model-review` step 4) and run
@@ -187,7 +195,10 @@ Worker naming is `<model display name or id> via <Tool name CLI>`, e.g. `Grok 4.
 8. **Fail:** send the worker the reviewer's or your findings and the failing test output verbatim (`rework.md`) and
    count one fix round: `task --set fixRounds=<n>`. At most **3 fix rounds**, then ask the user: a different model /
    Claude does it / skip (`task --set status=skipped`).
-9. **Pass:** `commit --run "<run>" --id t1 --tests <passed|failed|not-run>`. Prints `commit`, `files`, and
+9. **Pass:** `commit --run "<run>" --id t1` (`Tests:` comes from the check). Once a check ran, `commit` refuses (exit 7)
+   unless the last check passed on exactly these files: after any edit since (a fix round, a `needs` command), run
+   `check` again. `--override "<reason>"` commits anyway with a `Checks-override:` trailer; use it only when the user
+   says so, with their reason. Without a check, `--tests not-run` as before. Prints `commit`, `files`, and
    `cleanupWarning` if removing the worktree failed (mention it in the report; it is not a failure). Exit 8 = the
    worker changed nothing: treat as a failed attempt (if the reason says the task has a commit that is not on the run
    branch, an earlier commit conflicted: `discard` and redo). Exit 5 = the user's folder changed: follow the exit-5 rule
