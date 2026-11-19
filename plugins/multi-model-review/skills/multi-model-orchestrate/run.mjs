@@ -6,6 +6,7 @@ import path from "node:path";
 import {
   TOOLS, MODEL_ID, SESSION_ID, UsageError, safePath, runGit, readJson, repoFingerprint,
 } from "../multi-model-review/core.mjs";
+import { readChecks, checksFromCmds, executeChecks, worktreeFingerprint, CHECKS_FILE } from "./checks.mjs";
 
 // A preflight or landing refusal. The CLI exits 7 and prints the reason.
 export class RunRefused extends Error {
@@ -272,19 +273,48 @@ function statusPaths(dir) {
   return out;
 }
 
-export function commitTask(run, id, { title, tests, reworkOf } = {}) {
+// Run the task's checks in its worktree: the user's .orchestrate/checks.json, else the --cmd commands. The result and
+// a fingerprint of the files it ran on go in the ledger, where commit reads them. The manager cannot --set them.
+export function runChecks(run, id, { cmds = [] } = {}) {
+  checkId(id);
+  const dir = safePath(run ?? "", "run");
+  const ledger = readLedger(dir);
+  const wt = path.join(dir, "wt", id);
+  if (!fs.existsSync(wt)) throw new RunRefused(`no worktree for task ${id}: ${wt}`);
+  const fromFile = readChecks(ledger.repo);
+  if (!fromFile && cmds.length === 0) {
+    throw new UsageError(`no checks for this repo: add ${path.join(ledger.repo, CHECKS_FILE)} or pass --cmd "<test command>"`);
+  }
+  const config = fromFile ?? checksFromCmds(cmds);
+  const log = path.join(dir, "tests", `${id}.log`);
+  const r = executeChecks(config, wt, log);
+  const fresh = readLedger(dir);
+  fresh.tasks[id] = { ...(fresh.tasks[id] ?? {}), tests: r.result, testLog: log,
+    checks: { result: r.result, failed: r.failed, fingerprint: worktreeFingerprint(wt), at: new Date().toISOString(), source: fromFile ? "file" : "cmd" } };
+  writeLedger(dir, fresh);
+  return { ...r, log, source: fromFile ? "file" : "cmd", ...(fromFile && cmds.length ? { note: `--cmd ignored: ${CHECKS_FILE} wins` } : {}) };
+}
+
+export function commitTask(run, id, { title, tests, reworkOf, override } = {}) {
   checkId(id);
   const dir = safePath(run ?? "", "run");
   const ledger = readLedger(dir);
   const t = ledger.tasks[id] ?? {};
-  const testsValue = checkField("tests", tests);
+  const checks = t.checks && typeof t.checks === "object" ? t.checks : null;
+  if (override !== undefined) {
+    if (!checks) throw new UsageError("--override only applies to a task whose checks ran; run check first");
+    checkField("note", override);
+    if (!override.trim()) throw new UsageError("--override needs a reason");
+  }
+  // With a check on record its result decides Tests:, so --tests is not needed; without one the old rules apply.
+  let testsValue = checks ? null : checkField("tests", tests);
   const subject = checkField("title", title ?? t.title ?? "");
   if (!subject.trim()) throw new UsageError("a commit needs a title: pass --title or set the task's title");
   if (reworkOf !== undefined) checkField("commit", reworkOf);
   // A claim of passed or failed needs the test output behind it, saved at <run>/tests/<id>.log.
   const testLog = path.join(dir, "tests", `${id}.log`);
   const hasLog = fs.existsSync(testLog) && fs.statSync(testLog).isFile() && fs.statSync(testLog).size > 0;
-  if (testsValue !== "not run" && !hasLog) {
+  if (!checks && testsValue !== "not run" && !hasLog) {
     throw new UsageError(`--tests ${testsValue} needs the test output saved in a non-empty file at ${testLog}; save it there and commit again (or use --tests not-run)`);
   }
 
@@ -306,6 +336,17 @@ export function commitTask(run, id, { title, tests, reworkOf } = {}) {
     throw new NothingToCommit(`task ${id} changed nothing in its worktree`);
   }
 
+  // 2b. The check gate: the last check must have passed on exactly these files, unless the user overrode it.
+  if (checks) {
+    const same = worktreeFingerprint(wt) === checks.fingerprint;
+    if (!(same && checks.result === "passed") && override === undefined) {
+      throw new RunRefused(same
+        ? `task ${id}'s last check failed${checks.failed ? ` (${checks.failed})` : ""}; send the log to the worker, or commit with --override "<reason>" if the user says so`
+        : `task ${id} changed after its last check; run check again before committing`);
+    }
+    testsValue = same ? checks.result : "not run";
+  }
+
   // 3. Commit in the task worktree, with the agent trailers.
   const trailers = [];
   if (t.worker) trailers.push(`Implemented-by: ${t.worker}`);
@@ -314,6 +355,7 @@ export function commitTask(run, id, { title, tests, reworkOf } = {}) {
   if (t.reviewer) trailers.push(`Reviewed-by: ${t.reviewer}`);
   trailers.push(`Fix-rounds: ${t.fixRounds ?? 0}`);
   trailers.push(`Tests: ${testsValue}`);
+  if (override !== undefined) trailers.push(`Checks-override: ${override}`);
   if (reworkOf) trailers.push(`Rework-of: ${reworkOf}`);
   const who = identity(ledger.repo);
   git(wt, "add", "-A");
@@ -333,7 +375,7 @@ export function commitTask(run, id, { title, tests, reworkOf } = {}) {
   const commit = git(ledger.runWorktree, "rev-parse", "HEAD").trim();
 
   // 5. Record it first: the commit is on the run branch, so the ledger must say so whatever happens next.
-  setTask(dir, id, { status: "passed", commit, tests: testsValue, ...(testsValue !== "not run" ? { testLog } : {}) });
+  setTask(dir, id, { status: "passed", commit, tests: testsValue, ...(testsValue !== "not run" || checks ? { testLog } : {}) });
 
   // 6. The task's worktree and branch are done with. Best effort: a failure here is reported, not thrown.
   const result = { commit, files };
@@ -454,10 +496,17 @@ export const worktree = (args) => print(ensureWorktree(need(args, "--run"), need
 export const discard = (args) => print(discardTask(need(args, "--run"), need(args, "--id")));
 export const rebaselineCmd = (args) => print(rebaseline(need(args, "--run")));
 export const status = (args) => print(runStatus(need(args, "--run")));
+// Exit 0 when every check passed, 11 when one failed (the JSON is printed either way).
+export const check = (args) => {
+  const cmds = args.flatMap((a, i) => (a === "--cmd" ? [args[i + 1] ?? ""] : []));
+  const r = runChecks(need(args, "--run"), need(args, "--id"), { cmds });
+  print(r);
+  if (r.result !== "passed") process.exitCode = 11;
+};
 export const commit = (args) => {
-  const tests = need(args, "--tests");
+  const tests = flag(args, "--tests");
   print(commitTask(need(args, "--run"), need(args, "--id"), {
-    tests: tests === "not-run" ? "not run" : tests, title: flag(args, "--title"), reworkOf: flag(args, "--rework-of"),
+    tests: tests === "not-run" ? "not run" : tests, title: flag(args, "--title"), reworkOf: flag(args, "--rework-of"), override: flag(args, "--override"),
   }));
 };
 export const land = (args) => {

@@ -8,7 +8,7 @@ import {
   effortsFor, codexEffortLevels, DEFAULT_EFFORT, HOSTS, hostFrom,
 } from "../multi-model-review/core.mjs";
 import { work, defaultMode } from "./workers.mjs";
-import { start, task, worktree, status, commit, land, discard, rebaselineCmd, RunRefused } from "./run.mjs";
+import { start, task, worktree, status, commit, land, discard, rebaselineCmd, check, RunRefused } from "./run.mjs";
 
 const TIER_ORDER = ["heavy", "standard", "light"];
 
@@ -71,7 +71,7 @@ const COMMANDS = {
   menu: (args) => console.log(JSON.stringify(workerMenu({ platform: flag(args, "--platform") ?? process.platform, host: hostFrom(args) }), null, 2)),
   "record-write": (args) => { recordWrite(args[0], args[1], args[2]); console.log('{"ok":true}'); },
   work,
-  start, task, worktree, status, commit, land, discard, rebaseline: rebaselineCmd,
+  start, task, worktree, status, check, commit, land, discard, rebaseline: rebaselineCmd,
 };
 
 function main() {
