@@ -22,6 +22,11 @@ changed; one work item in, one PR out, Azure DevOps or GitHub).
 - The checks file is read from the **user's repo folder**, never from the task worktree, so a worker cannot rewrite
   its own gate (e.g. change `npm test` to `echo ok`).
 - Folder name `.orchestrate/` rather than `.claude/`, because Codex can manage runs too.
+- A check vouches for a snapshot: the task's base commit plus the tree `git add -A` would record (built in a throwaway
+  index, so `git add -N` cannot void it). `commit` stages exactly that set. Python test leftovers are deleted before
+  the checks and never committed. Checks that change the task's files fail. `discard` clears the check.
+- On timeout the whole process tree is killed (`taskkill /T` on Windows). Ignored files a worker changed are reported
+  as `ignoredChanged` for the manager to read (after the first branch review).
 - Commands run through the shell (they are the user's own lines), with the worktree as the working folder, a
   per-check timeout (default 20 minutes) and output capped in the log at 2 MB.
 

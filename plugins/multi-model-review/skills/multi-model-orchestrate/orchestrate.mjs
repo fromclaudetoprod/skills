@@ -78,13 +78,14 @@ function main() {
   const [command, ...args] = process.argv.slice(2);
   const fn = COMMANDS[command];
   if (!fn) { console.error(`usage: node orchestrate.mjs ${Object.keys(COMMANDS).join(" | ")}`); process.exit(2); }
-  fn(args);
+  return fn(args); // check is async; the others return undefined
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
-  try { main(); } catch (e) {
+  const fail = (e) => {
     // A refusal (exit 7) also prints its reason as JSON so callers can read it from stdout.
     if (e instanceof RunRefused) { console.log(JSON.stringify({ ok: false, reason: e.reason })); console.error(e.reason); process.exit(e.exitCode); }
     console.error(e instanceof Error ? e.message : String(e)); process.exit(2);
-  }
+  };
+  try { Promise.resolve(main()).catch(fail); } catch (e) { fail(e); }
 }

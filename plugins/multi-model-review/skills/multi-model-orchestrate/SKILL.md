@@ -184,6 +184,12 @@ Worker naming is `<model display name or id> via <Tool name CLI>`, e.g. `Grok 4.
    from the worktree. Exit 0 passed · **11 failed: go straight to step 8 with the log, verbatim. Do not review a task
    whose checks failed**; that review would be paid for code already known to be broken · 2 no checks file and no
    `--cmd`. Only with no test command at all, skip `check` and commit with `--tests not-run`. Make `diffs/` yourself.
+   `check` deletes Python test leftovers (`__pycache__/`, `*.pyc`, `.pytest_cache/`, `.coverage`) before it runs and
+   `commit` never includes them. It fails a run whose checks changed the task's files (a formatter, an updated
+   snapshot): the code tested would not be the code committed. `ignoredChanged` lists git-ignored files changed after
+   the worktree was made (outside dependency folders): they can make checks pass yet never reach the commit or the
+   review diff, so read them before the review and treat anything a worker planted there as a failed attempt. The
+   checks run the worker's code with your permissions, as running the tests always did; they are not a sandbox.
    **Before `commit`** (it runs `git add -A`) compare `git -C "<wt>" status --porcelain` with the worker's `changedFiles` plus the files from its fix rounds. List candidates with the dry run `git -C "<wt>" clean -nd`. Delete only paths that are untracked, are not in `changedFiles` or any fix-round list, and are known artifacts (`__pycache__/`, `.pytest_cache/`, `coverage/`, `.coverage`, `*.pyc`). Never delete a tracked file or anything else.
 7. **Review** (only after a passed check). `git -C "<wt>" add -N .` (deliberate, so the diff shows new files) then `git -C "<wt>" diff > "<run>/diffs/t1.patch"`.
    - *This session signs off:* read the diff and the test log; decide against the plan.

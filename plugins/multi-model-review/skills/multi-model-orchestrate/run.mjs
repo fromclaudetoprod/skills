@@ -6,7 +6,7 @@ import path from "node:path";
 import {
   TOOLS, MODEL_ID, SESSION_ID, UsageError, safePath, runGit, readJson, repoFingerprint,
 } from "../multi-model-review/core.mjs";
-import { readChecks, checksFromCmds, executeChecks, worktreeFingerprint, CHECKS_FILE } from "./checks.mjs";
+import { readChecks, checksFromCmds, executeChecks, worktreeFingerprint, fingerprintOf, isArtifact, ARTIFACT_PATHSPECS, CHECKS_FILE } from "./checks.mjs";
 
 // A preflight or landing refusal. The CLI exits 7 and prints the reason.
 export class RunRefused extends Error {
@@ -275,7 +275,7 @@ function statusPaths(dir) {
 
 // Run the task's checks in its worktree: the user's .orchestrate/checks.json, else the --cmd commands. The result and
 // a fingerprint of the files it ran on go in the ledger, where commit reads them. The manager cannot --set them.
-export function runChecks(run, id, { cmds = [] } = {}) {
+export async function runChecks(run, id, { cmds = [] } = {}) {
   checkId(id);
   const dir = safePath(run ?? "", "run");
   const ledger = readLedger(dir);
@@ -287,10 +287,11 @@ export function runChecks(run, id, { cmds = [] } = {}) {
   }
   const config = fromFile ?? checksFromCmds(cmds);
   const log = path.join(dir, "tests", `${id}.log`);
-  const r = executeChecks(config, wt, log);
+  const { before, ...r } = await executeChecks(config, wt, log);
+  // The checks vouch for the files as they were when they started (a pass also means nothing changed while they ran).
   const fresh = readLedger(dir);
   fresh.tasks[id] = { ...(fresh.tasks[id] ?? {}), tests: r.result, testLog: log,
-    checks: { result: r.result, failed: r.failed, fingerprint: worktreeFingerprint(wt), at: new Date().toISOString(), source: fromFile ? "file" : "cmd" } };
+    checks: { result: r.result, failed: r.failed, fingerprint: fingerprintOf(before), at: new Date().toISOString(), source: fromFile ? "file" : "cmd" } };
   writeLedger(dir, fresh);
   return { ...r, log, source: fromFile ? "file" : "cmd", ...(fromFile && cmds.length ? { note: `--cmd ignored: ${CHECKS_FILE} wins` } : {}) };
 }
@@ -307,6 +308,7 @@ export function commitTask(run, id, { title, tests, reworkOf, override } = {}) {
     if (!override.trim()) throw new UsageError("--override needs a reason");
   }
   // With a check on record its result decides Tests:, so --tests is not needed; without one the old rules apply.
+  if (!checks && tests === undefined) throw new UsageError("missing --tests (passed, failed or not-run): this task has no check on record");
   let testsValue = checks ? null : checkField("tests", tests);
   const subject = checkField("title", title ?? t.title ?? "");
   if (!subject.trim()) throw new UsageError("a commit needs a title: pass --title or set the task's title");
@@ -327,7 +329,7 @@ export function commitTask(run, id, { title, tests, reworkOf, override } = {}) {
   const wt = path.join(dir, "wt", id);
   const branch = `orchestrate/${ledger.topic}--${id}`;
   if (!fs.existsSync(wt)) throw new RunRefused(`no worktree for task ${id}: ${wt}`);
-  if (git(wt, "status", "--porcelain").trim() === "") {
+  if (statusPaths(wt).filter((p) => !isArtifact(p)).length === 0) {
     // A clean worktree whose branch is ahead of the run branch means an earlier commit hit a conflict and was kept.
     const ahead = gitRaw(ledger.repo, "rev-list", "--count", `${ledger.runBranch}..${branch}`);
     if (ahead.code === 0 && Number(ahead.out.trim()) > 0) {
@@ -358,7 +360,7 @@ export function commitTask(run, id, { title, tests, reworkOf, override } = {}) {
   if (override !== undefined) trailers.push(`Checks-override: ${override}`);
   if (reworkOf) trailers.push(`Rework-of: ${reworkOf}`);
   const who = identity(ledger.repo);
-  git(wt, "add", "-A");
+  git(wt, "add", "-A", "--", ".", ...ARTIFACT_PATHSPECS); // the same set a check's snapshot covers
   withMessage(dir, `commit-msg-${id}.txt`, `${subject}\n\n${trailers.join("\n")}\n`, (file) =>
     git(wt, ...who, "commit", "-q", "--cleanup=verbatim", "-F", file));
   const taskCommit = git(wt, "rev-parse", "HEAD").trim();
@@ -415,7 +417,7 @@ export function discardTask(run, id) {
   }
   gitRaw(ledger.repo, "worktree", "prune");
   if (gitRaw(ledger.repo, "show-ref", "--verify", "-q", `refs/heads/${branch}`).code === 0) git(ledger.repo, "branch", "-D", branch);
-  const { commit: _gone, ...rest } = ledger.tasks[id] ?? {};
+  const { commit: _gone, checks: _stale, ...rest } = ledger.tasks[id] ?? {};
   ledger.tasks[id] = { ...rest, status: "pending" };
   writeLedger(dir, ledger);
   return { id, status: "pending" };
@@ -497,9 +499,9 @@ export const discard = (args) => print(discardTask(need(args, "--run"), need(arg
 export const rebaselineCmd = (args) => print(rebaseline(need(args, "--run")));
 export const status = (args) => print(runStatus(need(args, "--run")));
 // Exit 0 when every check passed, 11 when one failed (the JSON is printed either way).
-export const check = (args) => {
+export const check = async (args) => {
   const cmds = args.flatMap((a, i) => (a === "--cmd" ? [args[i + 1] ?? ""] : []));
-  const r = runChecks(need(args, "--run"), need(args, "--id"), { cmds });
+  const r = await runChecks(need(args, "--run"), need(args, "--id"), { cmds });
   print(r);
   if (r.result !== "passed") process.exitCode = 11;
 };
