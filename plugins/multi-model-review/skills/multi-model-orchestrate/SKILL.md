@@ -186,7 +186,7 @@ Worker naming is `<model display name or id> via <Tool name CLI>`, e.g. `Grok 4.
    `--cmd`. Only with no test command at all, skip `check` and commit with `--tests not-run`. Make `diffs/` yourself.
    `check` deletes Python test leftovers (`__pycache__/`, `*.pyc`, `.pytest_cache/`, `.coverage`) before it runs and
    `commit` never includes them. It fails a run whose checks changed the task's files (a formatter, an updated
-   snapshot): the code tested would not be the code committed. `ignoredChanged` lists git-ignored files changed after
+   snapshot): the code tested would not be the code committed. `ignoredChanged` is a best-effort list of git-ignored files changed after
    the worktree was made (outside dependency folders): they can make checks pass yet never reach the commit or the
    review diff, so read them before the review and treat anything a worker planted there as a failed attempt. The
    checks run the worker's code with your permissions, as running the tests always did; they are not a sandbox.

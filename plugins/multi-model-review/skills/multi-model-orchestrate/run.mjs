@@ -291,7 +291,7 @@ export async function runChecks(run, id, { cmds = [] } = {}) {
   // The checks vouch for the files as they were when they started (a pass also means nothing changed while they ran).
   const fresh = readLedger(dir);
   fresh.tasks[id] = { ...(fresh.tasks[id] ?? {}), tests: r.result, testLog: log,
-    checks: { result: r.result, failed: r.failed, fingerprint: fingerprintOf(before), at: new Date().toISOString(), source: fromFile ? "file" : "cmd" } };
+    checks: { result: r.result, failed: r.failed, fingerprint: fingerprintOf(before), head: before.head, tree: before.tree, at: new Date().toISOString(), source: fromFile ? "file" : "cmd" } };
   writeLedger(dir, fresh);
   return { ...r, log, source: fromFile ? "file" : "cmd", ...(fromFile && cmds.length ? { note: `--cmd ignored: ${CHECKS_FILE} wins` } : {}) };
 }
@@ -361,6 +361,15 @@ export function commitTask(run, id, { title, tests, reworkOf, override } = {}) {
   if (reworkOf) trailers.push(`Rework-of: ${reworkOf}`);
   const who = identity(ledger.repo);
   git(wt, "add", "-A", "--", ".", ...ARTIFACT_PATHSPECS); // the same set a check's snapshot covers
+  // What is staged must be exactly the tree the check ran on: a path staged before (say with git add -f) is not
+  // removed by an exclude pathspec, so compare the real index, not just the files on disk.
+  if (checks && override === undefined && checks.tree) {
+    const staged = git(wt, "write-tree").trim();
+    if (staged !== checks.tree || git(wt, "rev-parse", "HEAD").trim() !== checks.head) {
+      gitRaw(wt, "reset", "-q");
+      throw new RunRefused(`task ${id}: what would be committed is not what its check ran on (something was staged that the check did not cover); run check again`);
+    }
+  }
   withMessage(dir, `commit-msg-${id}.txt`, `${subject}\n\n${trailers.join("\n")}\n`, (file) =>
     git(wt, ...who, "commit", "-q", "--cleanup=verbatim", "-F", file));
   const taskCommit = git(wt, "rev-parse", "HEAD").trim();

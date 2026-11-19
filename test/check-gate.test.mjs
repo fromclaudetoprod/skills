@@ -208,3 +208,20 @@ test("ignored files a worker changed are reported", async () => {
   const r = await runChecks(r0.run, "t1");
   assert.deepEqual(r.ignoredChanged, ["dist/shim.js"]);
 });
+
+test("an artifact staged by force is unstaged before the checks and never committed", async () => {
+  const s = setup({ checks: [{ name: "ok", run: OK }] });
+  fs.writeFileSync(path.join(s.t1.path, "evil.pyc"), "planted");
+  git(s.t1.path, "add", "-f", "evil.pyc");
+  await runChecks(s.run, "t1");
+  const c = commitTask(s.run, "t1", {});
+  assert.ok(!c.files.includes("evil.pyc"));
+});
+
+test("a file staged after the check makes commit refuse", async () => {
+  const s = setup({ checks: [{ name: "ok", run: OK }] });
+  await runChecks(s.run, "t1");
+  fs.writeFileSync(path.join(s.t1.path, "late.pyc"), "planted");
+  git(s.t1.path, "add", "-f", "late.pyc");
+  assert.throws(() => commitTask(s.run, "t1", {}), (e) => e instanceof RunRefused && /not what its check ran on/.test(e.reason));
+});
