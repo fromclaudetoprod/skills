@@ -43,6 +43,6 @@ moved by someone else: stop and show `runTip`, `base` and each passed task's `co
 4. Brief at `<run>/briefs/t3-rework/brief.md`: the new folder path, what to change (the user's words verbatim), the original
    task text and the commit's diff (`git show <sha>`), the test command.
 5. `work ... --worktree "<new wt>" --session <id>` with the same tool and model.
-6. Gate as usual, then `commit --run "<run>" --id t3-rework --tests <…> --rework-of <sha>`.
+6. `check`, review as usual, then `commit --run "<run>" --id t3-rework --rework-of <sha>`.
 7. No session (Copilot), or exit 6: the same model, fresh (`--session new` where supported), with the original diff
    and the findings in the brief. Say so to the user.
