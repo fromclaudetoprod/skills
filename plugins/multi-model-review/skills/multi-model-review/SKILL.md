@@ -159,7 +159,7 @@ most of it changed.
 # Confirm round N: <model> via <tool>, run locally and read-only
 ## Your job      For each Fix finding below answer FIXED or NOT FIXED (why). Raise a new finding only if one of
                  these fixes broke something, and name the input or path that triggers it. You may contest a
-                 Reject with evidence. This is not a fresh review: do not raise anything else. End with
+                 Reject or a Park with evidence. This is not a fresh review: do not raise anything else. End with
                  VERDICT: AGREE (all FIXED) or VERDICT: REVISE.
 ## Findings      each with its decision (Fix / Reject / Park), the reason, and for Fix what you changed
 ## The fix diff  only the changes made since the last review, pasted in full
@@ -175,6 +175,13 @@ node --no-deprecation "<this folder>/review.mjs" run --tool <codex|cursor|gemini
   --brief "<X>/round-N-brief.md" --out "<X>/round-N-reply.md" [--repo "<repository root>"] [--session new|<id>] \
   [--effort <level>]
 ```
+**Leave out `--repo` by default.** Without it the reviewer starts in the exchange folder and works from the brief
+alone, which is what step 1 builds the brief for. With it, the reviewer also explores the repository, and every file
+it opens is re-sent on each later turn: one code round cost 671k tokens with `--repo` against about 32k without. Pass
+`--repo` only when the reviewer has to read beyond the brief (a change too large to paste, or the user asks for a deep
+review that follows callers), and say so in one line with the reason. `--repo` also turns on the exit-5 guard; without
+it the read-only flags below still keep the reviewer from writing.
+
 Pass `--effort` whenever the row's `efforts` is not null, with the level chosen in step 3 (`medium` if none was
 asked). Without it, Codex and Copilot fall back to whatever each user's own config says, so the same model would
 cost and think differently on different machines. The JSON prints the `effort` used; name it in the report
@@ -211,7 +218,10 @@ denied. Never use a cloud coding agent for a round.
   - **Reject**: it is wrong, or wrong for this context. Give the evidence (file:line, a LIVE check, the plan).
   - **Park**: it is real but not worth doing now. Typical reasons: only an unusual combination or a hypothetical
     future caller triggers it; the fix adds more code or risk than the problem it prevents; it is below a design
-    doc's depth limit; it is outside what the user asked for. One line saying which.
+    doc's depth limit; it is outside what the user asked for. One line saying which, and what would make it worth
+    fixing (the input, caller or scale that would trigger it).
+  - **Never Park alone** a finding about security, data loss or corruption, money, or privacy: Fix it, Reject it with
+    evidence, or ask the user. Parking is for cost and likelihood, not for severity.
   - **Fix**: it is real, a plausible input or path triggers it, and the fix is smaller than the risk.
   Also tag each one **original** (in the work as first reviewed) or **fix-induced** (introduced by your own revision).
   A fix-induced finding meets the same bar; it does not get fixed just because you caused it.
@@ -226,7 +236,7 @@ denied. Never use a cloud coding agent for a round.
 - **Confirm round** (when the user asked to review the fixes, "until it agrees", or "review and fix"). After you
   revise, one reviewer, fresh session, gets a confirm brief (step 4) and answers one question per Fix finding: FIXED
   or NOT FIXED. It may raise a new finding only if one of your fixes broke something, naming the input that triggers
-  it; and it may contest a Reject with evidence. Everything else it raises is parked without a revision.
+  it; and it may contest a Reject or a Park with evidence. Everything else it raises is parked without a revision.
 - **What "agreement" means.** Every Fix finding confirmed FIXED, and no new finding that passes the Fix bar. That
   ends the review, even if the reviewer adds nits or says REVISE over parked points. If a confirm round leaves
   something to fix, fix only that and run one more confirm round on only that. **At most 2 confirm rounds**, then
@@ -263,7 +273,8 @@ field (Codex reports input, cached and output; Copilot reports none), what chang
 dispute with both sides stated fairly, and a total-tokens line taken from `totals`. Then one message to the user:
 - The final draft ready to paste, or the verified code findings, most severe first.
 - The decision count: "<n> findings: <f> fixed, <r> rejected, <p> parked", then each rejected and parked finding in
-  one line with its reason, so the user can overrule. Confirm rounds: how many, and whether every fix was confirmed.
+  one line with its reason, so the user can overrule. Put this list before the findings or draft, not after, and
+  before any commit or merge the user asked for. Confirm rounds: how many, and whether every fix was confirmed.
 - If the stop rule ended the review: which condition, and the question the user needs to answer.
 - Panel: one line per round: model, verdict, tokens used, the one thing it contributed. Dialogue: how many exchanges,
   why it stopped (agreement, max reached, standoff), tokens used, and what moved over the exchanges.
