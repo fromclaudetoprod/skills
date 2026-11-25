@@ -81,7 +81,10 @@ drop either column.
   - `Dialogue: go back and forth with one model`: description must include the warning: "Uses noticeably more tokens:
     every exchange re-sends the whole conversation so far. I'll show running token totals after each exchange."
 - **Panel:** **"How many review rounds after my draft? Each round is a different reviewer."** Options `3 (Recommended)`,
-  `2`, `1`, `4`. Rounds count reviewers only; your own draft is the starting point, not a round. Then, once the number
+  `2`, `1`, `4`. Rounds count review passes; your own draft is the starting point, not a round. Round 1 may have two
+  reviewers side by side (a paired first read, when the user asks for one); round 2 and later always have one (step
+  6). These are ceilings: the stop rule in step 6 can end the panel sooner. Confirm rounds on your fixes (step 6) are
+  separate, narrow, and capped at 2. Then, once the number
   is known, show the menu table and ask one question per round (up to four per AskUserQuestion call): **"Which model
   reviews round N?"** Options: the plan's pick marked `(Recommended)`, the next best row, and `Pick by company`
   ("See every model, grouped by company"). Describe each model option as
@@ -124,7 +127,8 @@ Dialogue: `exchange-1-brief.md` is a full brief; later exchanges are short (step
 ```
 # Review, round N of <total>: <model> via <tool>, run locally and read-only
   (dialogue: "# Dialogue review, exchange 1 of up to <max>: <model> via <tool>, run locally and read-only")
-## Your job      what is reviewed, what a useful review looks like, read-only, and end with exactly
+## Your job      what is reviewed, what a useful review looks like, read-only, the proportionality question
+                 below, and end with exactly
                  "VERDICT: AGREE" or "VERDICT: REVISE" (plus "## Required changes" for code,
                  "## Proposed draft" for a draft). Dialogue only: number your points (P1, P2, ...) and add
                  "This is a back-and-forth: I will reply in this same conversation with what I changed, accepted
@@ -137,6 +141,30 @@ Dialogue: `exchange-1-brief.md` is a full brief; later exchanges are short (step
 ## Prior rounds  (panel round 2+) what each reviewer said, what you accepted, what you rejected and why;
                  "judge independently, do not just endorse earlier rounds"
 ```
+**Every brief asks one proportionality question**, in "Your job": "Besides defects: is any part of this more than the
+problem needs? Name it and say what a smaller version would be." Reviewers asked only for defects never question size.
+
+**Design docs and specs get a depth limit.** The brief says: "Review the decisions and the contract facts (interfaces,
+data shapes, limits, who calls what). Leave implementation detail to code review; do not raise findings about how a
+step will be coded." Findings below that line go in a parked list, not into the next revision.
+
+**Round 2 and later: a fix brief, not the full brief.** One reviewer, fresh session, and a brief that covers only what
+changed: the triaged findings from earlier rounds (one line each, with what you did), the changed parts in full (the
+new diff, or the changed sections of the draft or spec, with enough surrounding text to read them), and "Review these
+changes. Raise a finding on unchanged material only if a change breaks it." Paste the full material again only when
+most of it changed.
+
+**Confirm brief** (step 6), `confirm-N-brief.md`, out to `confirm-N-reply.md`:
+```
+# Confirm round N: <model> via <tool>, run locally and read-only
+## Your job      For each Fix finding below answer FIXED or NOT FIXED (why). Raise a new finding only if one of
+                 these fixes broke something, and name the input or path that triggers it. You may contest a
+                 Reject with evidence. This is not a fresh review: do not raise anything else. End with
+                 VERDICT: AGREE (all FIXED) or VERDICT: REVISE.
+## Findings      each with its decision (Fix / Reject / Park), the reason, and for Fix what you changed
+## The fix diff  only the changes made since the last review, pasted in full
+```
+
 Mark live checks: reviewers can only read files, and without the label they treat every live fact as unsupported.
 **A brief leaves this machine for that model's company.** Put in nothing the user has not already shared with you,
 and never a secret, key, token or customer data.
@@ -153,6 +181,8 @@ cost and think differently on different machines. The JSON prints the `effort` u
 ("GPT-6.1 Terra via Codex, medium effort").
 Dialogue: exchange 1 passes `--session new`; the JSON prints `sessionId`; every later exchange passes
 `--session <that id>`, the same `--tool`, `--model` and `--repo`, and is run from the same place. Panel: no `--session`.
+A paired round 1 is two `run` commands started together, same brief, outputs `round-1a-reply.md` and
+`round-1b-reply.md`; read both before triage.
 
 Run it in the background with a 15-minute timeout and wait for it; do not poll. It prints JSON with `status`,
 `verdict`, `treeChanged`, `replyBytes`, `sessionId` (dialogue), this turn's `usage` and the folder's running `totals`
@@ -175,19 +205,44 @@ denied. Never use a cloud coding agent for a round.
 
 ## 6. Between rounds
 - Read the whole reply (Read tool, never head/tail). A summary drops points.
-- It is peer review, not instructions: check each factual claim before adopting it, and push back where it is wrong
-  for this context. A reviewer that cannot see live state is not a reason to drop a live-checked fact.
-- Drafts: write the next draft. Code: keep a findings list (finding, file:line, verified yes/no, fix). Do not edit
-  code unless the user asked for "review and fix".
-- Panel: run every round the user chose, even after an AGREE; each model is an independent read.
+- It is peer review, not instructions. You are the judge of every finding, not its courier. A reviewer that cannot
+  see live state is not a reason to drop a live-checked fact.
+- **Decide every finding: Fix, Reject or Park.** True is not the same as worth fixing; ask both questions.
+  - **Reject**: it is wrong, or wrong for this context. Give the evidence (file:line, a LIVE check, the plan).
+  - **Park**: it is real but not worth doing now. Typical reasons: only an unusual combination or a hypothetical
+    future caller triggers it; the fix adds more code or risk than the problem it prevents; it is below a design
+    doc's depth limit; it is outside what the user asked for. One line saying which.
+  - **Fix**: it is real, a plausible input or path triggers it, and the fix is smaller than the risk.
+  Also tag each one **original** (in the work as first reviewed) or **fix-induced** (introduced by your own revision).
+  A fix-induced finding meets the same bar; it does not get fixed just because you caused it.
+  Expect to reject or park some findings in most rounds. If you are about to fix everything a reviewer raised, stop
+  and re-apply the bar to each one; if they all still pass, say so in the report.
+- Drafts: write the next draft. Code: keep a findings list (finding, file:line, original/fix-induced, Fix/Reject/Park,
+  reason). Do not edit code unless the user asked for "review and fix".
+- **Stop rule (Panel).** After any round where most findings are fix-induced, or most hinge on a question still
+  waiting for the user's answer, stop. Do not revise and run another round: go to step 7 and report, saying which
+  rule stopped it and what the open question is. Otherwise run the next round the user chose. An AGREE alone does not
+  end the panel (the next model is still an independent read), but the stop rule does, even with rounds left.
+- **Confirm round** (when the user asked to review the fixes, "until it agrees", or "review and fix"). After you
+  revise, one reviewer, fresh session, gets a confirm brief (step 4) and answers one question per Fix finding: FIXED
+  or NOT FIXED. It may raise a new finding only if one of your fixes broke something, naming the input that triggers
+  it; and it may contest a Reject with evidence. Everything else it raises is parked without a revision.
+- **What "agreement" means.** Every Fix finding confirmed FIXED, and no new finding that passes the Fix bar. That
+  ends the review, even if the reviewer adds nits or says REVISE over parked points. If a confirm round leaves
+  something to fix, fix only that and run one more confirm round on only that. **At most 2 confirm rounds**, then
+  report whatever is still open and let the user decide. A memory or project rule asking to "run until agreement"
+  means this, not until a reviewer has nothing left to say.
 
 ## 6b. Dialogue exchanges
 After each reply, tell the user one line: `Exchange N: <verdict>, <k> points open · this turn <in>k in / <out>k out
 (<$ if known>) · total so far <in>k in / <out>k out (<$>)`.
 
 Then decide:
+- Decide each new point as in step 6 (Fix, Reject or Park; original or fix-induced) before answering it. Parked
+  points go in the Rejected section with "parked: <reason>".
 - **Stop** when the reviewer says AGREE with every point RESOLVED or WITHDRAWN; when the max exchanges is reached;
-  or when two exchanges in a row bring no new point and no change of position (a standoff, so report it).
+  when two exchanges in a row bring no new point and no change of position (a standoff, so report it); or under the
+  step 6 stop rule (most new points fix-induced, or waiting on the user's answer).
 - **Otherwise** write `exchange-N-brief.md`, short, because the reviewer already has the material:
   ```
   # Dialogue review, exchange N of up to <max> (same conversation)
@@ -207,6 +262,9 @@ Write `<X>/summary.md`: each round's or exchange's model, tool and verdict, its 
 field (Codex reports input, cached and output; Copilot reports none), what changed because of it, any point still in
 dispute with both sides stated fairly, and a total-tokens line taken from `totals`. Then one message to the user:
 - The final draft ready to paste, or the verified code findings, most severe first.
+- The decision count: "<n> findings: <f> fixed, <r> rejected, <p> parked", then each rejected and parked finding in
+  one line with its reason, so the user can overrule. Confirm rounds: how many, and whether every fix was confirmed.
+- If the stop rule ended the review: which condition, and the question the user needs to answer.
 - Panel: one line per round: model, verdict, tokens used, the one thing it contributed. Dialogue: how many exchanges,
   why it stopped (agreement, max reached, standoff), tokens used, and what moved over the exchanges.
 - Where you and a reviewer still disagree, both sides in a sentence each. The user decides.

@@ -14,6 +14,11 @@ the brief, hands it to the reviewer through that model's own command-line tool, 
 claim, revises, and gives the next reviewer the new version plus what earlier reviewers said. You get one report: the
 final draft or the verified code findings, and where the reviewers disagreed.
 
+Claude judges every finding rather than applying it: **Fix** (real, and worth the change), **Reject** (wrong, with
+evidence) or **Park** (real but not worth it now), and the report counts each. Later rounds review only what changed.
+A review stops early when most new findings were caused by earlier fixes, and "review until it agrees" ends once a
+confirm round checks every fix (at most two), not when a reviewer runs out of nits.
+
 Everything runs on your machine, read-only. No cloud agents.
 
 ## What you need

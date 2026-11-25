@@ -195,12 +195,18 @@ Worker naming is `<model display name or id> via <Tool name CLI>`, e.g. `Grok 4.
    - *This session signs off:* read the diff and the test log; decide against the plan.
    - *Others sign off:* write a review brief at `<run>/briefs/t1-review/brief.md`, a folder of its own apart from the task's (diff pasted in, the task brief, the test log, ending in
      `VERDICT: AGREE` or `VERDICT: REVISE` with `## Required changes`, as in `multi-model-review` step 4) and run
-     `review.mjs run --tool <t> --model <id> --brief … --out … --repo "<wt>"`. Read only the `verdict` and the test
-     result. Check reviewer claims before sending them on. `review.mjs run` exits: 5 (`treeChanged`) stop the run like
+     `review.mjs run --tool <t> --model <id> --brief … --out … --repo "<wt>"`. Read the whole reply (Read tool) and
+     decide every finding yourself: Fix, Reject or Park, as in `multi-model-review` step 6. The reviewer advises; you
+     sign off. A REVISE whose findings are all rejected or parked is a pass: say so in the task's note.
+     `review.mjs run` exits: 5 (`treeChanged`) stop the run like
      `work` (exit-5 rule above); 2, 3 or 4 pick another reviewer, or ask.
-8. **Fail:** send the worker the reviewer's or your findings and the failing test output verbatim (`rework.md`) and
-   count one fix round: `task --set fixRounds=<n>`. At most **3 fix rounds**, then ask the user: a different model /
-   Claude does it / skip (`task --set status=skipped`).
+8. **Fail** (a failing test, or at least one Fix finding): send the worker only the Fix findings, each with your
+   reason, and the failing test output verbatim (`rework.md`). Never forward rejected or parked findings; keep them
+   for the report. Count one fix round: `task --set fixRounds=<n>`. The re-review after a fix round is a confirm
+   round (`multi-model-review` steps 4 and 6): the reviewer checks each Fix finding FIXED or NOT FIXED and raises new
+   findings only where a fix broke something. If most findings in a re-review are fix-induced, stop fixing and ask
+   the user now rather than spending the remaining rounds. At most **3 fix rounds**, then ask the user: a different
+   model / Claude does it / skip (`task --set status=skipped`).
 9. **Pass:** `commit --run "<run>" --id t1` (`Tests:` comes from the check). Once a check ran, `commit` refuses (exit 7)
    unless the last check passed on exactly these files: after any edit since (a fix round, a `needs` command), run
    `check` again. `--override "<reason>"` commits anyway with a `Checks-override:` trailer; use it only when the user

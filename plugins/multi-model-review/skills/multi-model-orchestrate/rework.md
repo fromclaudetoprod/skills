@@ -4,7 +4,8 @@ Read this only when sending work back to a worker, resuming a run, or reworking 
 
 ## Fix round inside a run
 The worker's worktree is still there. Write a new brief `<run>/briefs/t1/fix<n>.md` (beside the task's `brief.md`) that carries, verbatim: the
-reviewer's findings (or yours) and the failing test output. Do not summarize either. Add the worktree path and "edit
+findings you decided to Fix (the reviewer's wording or yours, each with your one-line reason) and the failing test
+output. Do not summarize either. Leave out findings you rejected or parked. Add the worktree path and "edit
 files only in this folder; do not commit". Then:
 ```
 node --no-deprecation "<this folder>/orchestrate.mjs" work --tool <tool> --model <id> --repo "<repository root>" \
